@@ -1,0 +1,46 @@
+# ===== 依赖 =====
+node_modules/
+
+# ===== 构建产物 =====
+dist/
+build/
+out/
+release/
+*.blockmap
+*.7z
+
+# ===== 日志和临时文件 =====
+*.log
+logs/
+npm-debug.log*
+*.tmp
+*.temp
+*.swp
+*.swo
+*.bak
+
+# ===== 环境变量和密钥 =====
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# ===== IDE / 编辑器 =====
+.idea/
+.vscode/
+*.iml
+*.ipr
+*.iws
+
+# ===== 操作系统 =====
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ===== WorkBuddy 本地工作区（含对话记忆与旧原型归档） =====
+.workbuddy/
+
+# ===== 测试覆盖率 =====
+coverage/
+.nyc_output/

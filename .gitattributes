@@ -1,0 +1,15 @@
+# 统一换行符：仓库内一律 LF，避免 Windows/macOS 之间整仓「被修改」
+* text=auto eol=lf
+
+# 二进制资源，不做任何转换
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.ttf binary
+*.woff binary
+*.woff2 binary
+
+# 词库为纯文本，按文本处理
+*.txt text eol=lf

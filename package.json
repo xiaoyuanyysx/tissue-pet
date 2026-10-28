@@ -1,0 +1,73 @@
+{
+  "name": "desk-pet",
+  "version": "1.0.0",
+  "description": "小纸巾 · 学习卷纸桌宠",
+  "main": "main/index.js",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder",
+    "smoke": "electron . --smoke-test"
+  },
+  "author": "you",
+  "license": "MIT",
+  "dependencies": {
+    "canvas": "^3.2.1",
+    "chardet": "^2.1.0",
+    "franc-min": "^6.2.0",
+    "iconv-lite": "^0.6.3",
+    "jszip": "^3.10.1",
+    "mammoth": "^1.13.0",
+    "pdfjs-dist": "3.11.174"
+  },
+  "devDependencies": {
+    "electron": "^28.3.0",
+    "electron-builder": "^24.13.3",
+    "node-pre-gyp": "^0.17.0"
+  },
+  "build": {
+    "appId": "com.example.deskpet",
+    "productName": "学习卷纸桌宠",
+    "asar": true,
+    "files": [
+      "main/**",
+      "renderer/**",
+      "preload.js",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "词库",
+        "to": "词库",
+        "filter": [
+          "**/*.txt"
+        ]
+      },
+      {
+        "from": "resources",
+        "to": "resources"
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "shortcutName": "学习卷纸桌宠"
+    }
+  }
+}

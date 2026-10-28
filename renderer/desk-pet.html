@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="UTF-8" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; font-src 'self' data:;" />
+<title>小纸巾 · 学习卷纸桌宠</title>
+<link rel="stylesheet" href="./css/app.css" />
+</head>
+<body>
+
+<div class="stage" id="stage">
+  <div class="desk-pet" id="deskPet">
+
+    <!-- 纸带视口：内容由 PaperStreamEngine 按逻辑纸 index 渲染 -->
+    <div class="viewport" id="viewport">
+      <div class="paper-stream" id="paperStream"></div>
+    </div>
+
+    <!-- 卷筒拖动热区 -->
+    <div class="drag-zone" id="dragZone"></div>
+
+    <!-- ★ 卷纸造型层（结构禁区：不得增删改任何图形节点，仅允许参数化） -->
+    <svg class="roll-layer" id="rollLayer" viewBox="0 0 500 600" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+            <pattern id="dash-pattern" width="170" height="200" patternUnits="userSpaceOnUse">
+                <line x1="0" y1="0" x2="170" y2="0" stroke="#94A3B8" stroke-width="1.5" stroke-dasharray="6 6" />
+            </pattern>
+            <clipPath id="roll-clip">
+                <path d="M 165,130 L 315,130 C 330,130 335,150 335,180 C 335,210 325,230 300,230 L 200,230 C 180,230 165,210 165,180 Z" />
+            </clipPath>
+            <filter id="reflection-blur"><feGaussianBlur stdDeviation="1.5" /></filter>
+        </defs>
+        <g stroke="#1E293B" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M 165,130 L 315,130 C 330,130 335,150 335,180 C 335,210 325,230 300,230 L 200,230 C 180,230 165,210 165,180 Z" fill="#FFFFFF" />
+            <g clip-path="url(#roll-clip)">
+                <rect x="165" y="130" width="170" height="100" fill="url(#dash-pattern)" id="roll-dash-rect" />
+                <g id="reflection-group" opacity="0.15" filter="url(#reflection-blur)">
+                    <text id="reflection-text" x="250" y="180" text-anchor="middle" font-family="sans-serif" font-weight="bold" fill="#1E293B" font-size="45">Preview</text>
+                </g>
+            </g>
+            <ellipse cx="165" cy="180" rx="25" ry="50" fill="#FFFFFF" />
+            <ellipse cx="165" cy="180" rx="8" ry="18" fill="#E2E8F0" />
+            <path d="M 165,150 A 14 25 0 0 1 178,180 A 20 35 0 0 1 145,180 A 25 45 0 0 1 165,210" fill="none" stroke-width="1.5" />
+        </g>
+    </svg>
+
+    <!-- 新增 UI 一律挂在容器上，不嵌入 SVG 内部 -->
+    <button class="gear-btn" id="gearBtn" title="设置中心">⚙</button>
+    <div class="scale-corner" id="scaleCorner" title="拖动缩放（可在设置中关闭）"></div>
+  </div>
+</div>
+
+<div class="ui-root" id="uiRoot"></div>
+<div class="toast-host" id="toastHost"></div>
+
+<!-- 采用经典脚本按序加载（避免 file:// 下的 ES Module 限制） -->
+<script src="./js/util.js"></script>
+<script src="./js/renderer-store.js"></script>
+<script src="./js/pet-view.js"></script>
+<script src="./js/leisure/measure.js"></script>
+<script src="./js/leisure/paginator.js"></script>
+<script src="./js/providers/learn.js"></script>
+<script src="./js/providers/leisure.js"></script>
+<script src="./js/providers/checklist.js"></script>
+<script src="./js/providers/mode-router.js"></script>
+<script src="./js/engine/backtrack-stack.js"></script>
+<script src="./js/engine/paper-stream.js"></script>
+<script src="./js/engine/tear-controller.js"></script>
+<script src="./js/ui/toast.js"></script>
+<script src="./js/ui/context-menu.js"></script>
+<script src="./js/ui/scale-corner.js"></script>
+<script src="./js/ui/window-drag.js"></script>
+<script src="./js/ui/settings-center.js"></script>
+<script src="./js/ui/interaction-layer.js"></script>
+<script src="./js/app.js"></script>
+</body>
+</html>
