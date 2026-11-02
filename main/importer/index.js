@@ -72,9 +72,11 @@ function detectLanguages(sample) {
     .filter((c) => c.n / total >= 0.02)
     .map((c) => c.name);
 
-  // 仅拉丁字母时用 franc-min 细分语种（低置信度只作为默认值，用户可改）
+  // 仅拉丁字母时用 franc-min 细分语种（低置信度只作为默认值，用户可改）。
+  // 样本太短时 franc 会把 `apple / ruler` 判成德语，所以要求足够长的样本文本才采信；
+  // 短样本仍保留「英语」作为首选（导入后可在设置里改，不必重导）。
   const onlyLatin = counts.length === 1 && counts[0].name === '英语';
-  if (onlyLatin && francFn) {
+  if (onlyLatin && francFn && text.length >= 500) {
     try {
       const code = francFn(text.slice(0, 2000), { minLength: 3 });
       const mapped = FRANC_MAP[code];
@@ -89,11 +91,86 @@ function detectLanguages(sample) {
 
 /* ---------------- 词条行切分（附录 B） ---------------- */
 
+/** 列名单元格：日文 / 中文 / 日文语法 / 中文意思 / word / meaning …（只在「整行都是列名」时才采信） */
+const HEADER_CELL =
+  /^(?:日文|日語?|中文|華語|英文|英语|英語|单词|單詞|词|詞|词汇|詞彙|词条|詞條|词组|詞組|短语|短語|读音|讀音|音标|音標|注音|拼音|发音|發音|假名|词性|詞性|意思|释义|釋義|解释|解釋|例句|备注|備註|序号|序號|编号|編號|no\.?|#|word|words|vocabulary|meaning|definition|translation|reading|pronunciation|phonetic|pos|partofspeech|example|phrase|unit|lesson)(?:语法|語法|惯用语|慣用語|意思|释义|釋義)?$/i;
+
+/** 去掉列名外面可能带的斜杠 / 括号：/phonetic/ → phonetic */
+const HEADER_TRIM = /^[\s/\\[\]【】()（）「」『』]+|[\s/\\[\]【】()（）「」『』]+$/g;
+
+/**
+ * 表头行判定：**整行每一格都是列名**才算。
+ * 不能写成「只要有一格像列名就丢掉」——那样英文词 no / reading 会被当表头整条误删。
+ * 分隔符：优先 tab（docx 表格），其次连续空格（PDF 教材词表常见「序号 单词 注音 释义」）。
+ */
+function isHeaderRow(raw) {
+  const byTab = raw.indexOf('\t') >= 0;
+  const cells = raw
+    .split(byTab ? '\t' : /\s+/)
+    .map((c) => String(c).replace(HEADER_TRIM, '').trim())
+    .filter(Boolean);
+  if (cells.length < 2) return false;
+  return cells.every((c) => HEADER_CELL.test(c));
+}
+
+/**
+ * 词尾的读音括号：「施す（ほどこす）」→ 词 = 施す、读音 = ほどこす。
+ * 日文词条的标准写法，括号里是假名，不能按「句子标点」处理。
+ */
+const PAREN_TAIL = /^(.+?)\s*[（(]\s*([^（()）]{1,40})\s*[）)]$/;
+
+/* ---- 英文教材词表（PDF 抽取后无任何分隔符）：序号 + 单词 + 音标 + 词性.释义 ----
+   典型：`12 approach ə'prəutʃ n.接近 途径 方法 vt.向...靠近`
+   这类行既没有 tab、也没有冒号/破折号，靠 splitEntryRow 的通用规则只能切到行首的序号，
+   导致整份文件识别率过低而被当成「不是词库」拒掉。 */
+const LATIN_HEAD = /^([A-Za-z][A-Za-z'’.\-]{0,23})\s+([\s\S]+)$/;
+/* 词性缩写是「音标 / 释义」之间唯一稳定的锚点。PDF 常把 adj 的点吃掉（`adj情合理的`），
+   所以点号可缺省；aux.v. 这种带内嵌点的要先于 aux 匹配。 */
+const POS_MARK =
+  /(?:^|[\s,;])((?:aux\.?v|abbr|prep|conj|pron|adj|adv|aux|art|num|int|vt|vi|ad|pl|n|v)\b\.?(?![A-Za-z]))/;
+const IPA_CHAR = /[əʃʒθðŋɑɔɜʌæɪʊɒɡɐɛɚɝˈˌː]/;
+
+function looksPhonetic(s) {
+  if (!s) return false;
+  if (!/\s/.test(s)) return true; // 位置已经确定是音标位，单 token 直接采信
+  // 多 token（PDF 断行）：必须带音标专有记号，避免把正文里的 `is a pen` 当音标
+  return /['ˌˈː/[]/.test(s) || IPA_CHAR.test(s);
+}
+
+function splitLatinEntryRow(raw) {
+  const m = LATIN_HEAD.exec(raw);
+  if (!m) return null;
+  const word = m[1];
+  const rest = m[2].trim();
+  if (!rest) return null;
+  const p = POS_MARK.exec(rest);
+  if (!p) return null;
+  const start = p.index + (p[0].length - p[1].length);
+  // 词性与释义之间的分隔符（`apple - n.苹果`）会落进「音标位」，它是标点不是读音。
+  // 不清掉的话纸面上会出现 `/ - /` 这种假音标。
+  const head = rest.slice(0, start).replace(/^[\s\-–—:：,，;；|｜]+|[\s\-–—:：,，;；|｜]+$/g, '');
+  const definition = rest.slice(start).trim();
+  if (!definition) return null;
+  let phonetic = '';
+  if (head) {
+    if (head.length > 40 || !looksPhonetic(head)) return null;
+    // PDF 会把音标拆成 `'stju dənt`、`jə, jiə`，这里的空格是排版断行而非音节分隔
+    phonetic = head.replace(/\s*,\s*/g, ',').replace(/\s+/g, '');
+  }
+  return { word, phonetic, definition };
+}
+
 function splitEntryRow(line) {
   let raw = String(line).replace(/\uFEFF/g, '').trim();
   if (!raw) return null;
-  raw = raw.replace(/^\d+[.、)]\s*/, '');
+  // 行首序号：`10. word` / `10、word` / `10 word`（PDF 抽取常见第三种）
+  raw = raw.replace(/^\d{1,4}[.、)]\s*/, '').replace(/^\d{1,4}\s+/, '').trim();
+  if (!raw) return null;
   if (!/[A-Za-z\u3040-\u30ff\u4e00-\u9fff\uac00-\ud7af\u0400-\u04ff]/.test(raw)) return null;
+  if (isHeaderRow(raw)) return null;
+
+  const latin = splitLatinEntryRow(raw);
+  if (latin) return latin;
 
   const attempts = [];
   const tabAt = raw.indexOf('\t');
@@ -110,18 +187,217 @@ function splitEntryRow(line) {
   if (singleSpace) attempts.push([singleSpace[1], singleSpace[2]]);
 
   for (const [w, d] of attempts) {
-    const word = String(w).trim();
+    let word = String(w).trim();
     const definition = String(d).trim();
     if (!word || !definition) continue;
-    if (word.length > 24) continue;
+    // 释义得真的有内容：PDF 抽取常留下 `)` `--` 这类纯标点残渣
+    if (!/[A-Za-z\u3040-\u30ff\u4e00-\u9fff\uac00-\ud7af\u0400-\u04ff]/.test(definition)) continue;
+
+    // 先把词尾读音括号剥出来，再做「句子标点」判定——否则 （） 会把这个词整条否掉
+    let phonetic = '';
+    const pm = PAREN_TAIL.exec(word);
+    if (pm) {
+      word = pm[1].trim();
+      phonetic = pm[2].trim();
+    }
+
+    if (!word || word.length > 24) continue;
     // 词条本体不应是句子：出现句读标点即视为普通正文
     if (/[，。！？；、…“”‘’（）《》]/.test(word)) continue;
     if (word.split(/\s+/).length > 5) continue;
     if (word === definition) continue;
     if (!/[A-Za-z\u3040-\u30ff\u4e00-\u9fff\uac00-\ud7af\u0400-\u04ff]/.test(word)) continue;
-    return { word, definition };
+    return { word, phonetic, definition };
   }
   return null;
+}
+
+/**
+ * 整库语言一致性清洗：一份英语词表里偶尔会混进几条「词列整块丢失」的残行
+ * （PDF 抽不出单词时，行首就变成了释义里的中文）。它们不是词，留着只会让
+ * 学习卡片上出现「汗」「跌」这种中文卡。
+ * 只在「绝大多数词条是拉丁词」且「混入比例极低」时动手，中/日文词库完全不受影响。
+ */
+const CJK_IN = /[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]/;
+
+function dropLangOutliers(entries) {
+  if (!entries || entries.length < 20) return entries;
+  const latin = entries.filter((e) => /[A-Za-z]/.test(e.word) && !CJK_IN.test(e.word)).length;
+  if (latin / entries.length < 0.85) return entries; // 不是以拉丁词为主，别乱删
+  const bad = entries.filter((e) => CJK_IN.test(e.word));
+  if (!bad.length) return entries;
+  if (bad.length / entries.length > 0.05) return entries; // 中英混排词表，保守不动
+  return entries.filter((e) => !CJK_IN.test(e.word));
+}
+
+/* ---------------- 多语言释义（B8 数据层） ---------------- */
+
+/**
+ * 一段文字属于哪种语言：按书写系统判，只用来给「同一条词条的多语言释义」贴标签。
+ * 拉丁字母一律记「英语」——法语/德语靠 26 个字母分不出来，硬猜比标错更糟。
+ */
+const SEG_SCRIPT = [
+  { name: '日语', re: /[\u3040-\u30ff]/ },
+  { name: '韩语', re: /[\uac00-\ud7af\u1100-\u11ff]/ },
+  { name: '中文', re: /[\u4e00-\u9fff\u3400-\u4dbf]/ },
+  { name: '俄语', re: /[\u0400-\u04ff]/ },
+  { name: '英语', re: /[A-Za-z]/ }
+];
+
+function segmentLang(seg) {
+  for (const { name, re } of SEG_SCRIPT) {
+    if (re.test(seg)) return name;
+  }
+  return '';
+}
+
+/** 释义里的分隔符：分号 / 竖线 / 两侧带空格的斜杠（见 splitDefinitionLangs） */
+
+/**
+ * 把「n.苹果 / りんご」切成 { 中文: 'n.苹果', 日语: 'りんご' }。
+ * 只在**能看出明确的多语言结构**时才切：
+ *  - 出现假名/谚文/西里尔字母，或用了竖线、带空格的斜杠
+ * 中文释义内部常见的「；」不切（切了也是同一种语言，合并回去反而会改动原文）。
+ * 拿不准时返回 null，保持 definition 原文不动 —— 宁可少一个功能，不可丢内容。
+ */
+function splitDefinitionLangs(text) {
+  const raw = String(text || '').trim();
+  if (!raw || raw.length > 240) return null;
+  const exotic = /[\u3040-\u30ff\uac00-\ud7af\u0400-\u04ff]/.test(raw);
+  const explicitSep = /[|｜]|\s[/／]\s/.test(raw);
+  if (!exotic && !explicitSep) return null;
+
+  // 有假名/谚文/西里尔时，「-」也可以当分隔符（尺子 - ものさし）；
+  // 纯汉语释义里的破折号不算，否则「苹果 - 苹果树」这类会被误切。
+  const sep = exotic ? /\s*[;；|｜]\s*|\s+[/／–—-]\s+/ : /\s*[;；|｜]\s*|\s+[/／]\s+/;
+
+  const segs = raw.split(sep).map((s) => s.trim()).filter(Boolean);
+  if (segs.length < 2 || segs.length > 6) return null;
+
+  const groups = new Map();
+  for (const s of segs) {
+    const lang = segmentLang(s);
+    if (!lang) return null; // 有段落判不出语言 → 结构不可靠，不动
+    groups.set(lang, groups.has(lang) ? `${groups.get(lang)}；${s}` : s);
+  }
+  if (groups.size < 2) return null;
+  return Object.fromEntries(groups);
+}
+
+/**
+ * 词库的「语言槽位」——导入对话框据此让用户勾选「这份词表包含哪些语言」。
+ * 槽位 = 词条列（固定要留）+ 各释义语言；释义里没切出多语言的条目归到「原文释义」槽位。
+ */
+function buildLangSlots(entries) {
+  const head = entries.slice(0, 300);
+  const wordLang = detectLanguages(head.map((e) => e.word).join('\n'))[0] || '未知';
+  const plain = entries.filter((e) => !e.translations);
+  const plainSample = (plain.length ? plain : head)
+    .slice(0, 300)
+    .map((e) => e.definition)
+    .join('\n');
+  const plainLang = detectLanguages(plainSample)[0] || '中文';
+
+  const counts = new Map();
+  const samples = new Map();
+  for (const e of entries) {
+    if (!e.translations) continue;
+    for (const [k, v] of Object.entries(e.translations)) {
+      counts.set(k, (counts.get(k) || 0) + 1);
+      if (!samples.has(k)) samples.set(k, v);
+    }
+  }
+  const byCount = [...counts.entries()].sort((a, b) => b[1] - a[1]).map((x) => x[0]);
+  // 原文释义槽位：有条目没切分过 → 它就是这些释义的语言；全都切分过 → 取出现最多的译文语言
+  const baseGuess = plain.length ? plainLang : byCount[0] || plainLang;
+
+  const slots = [
+    {
+      key: '__word__',
+      label: wordLang,
+      kind: 'word',
+      fixed: true, // 词条列是主键，必须保留
+      count: entries.length,
+      sample: head[0] ? head[0].word : ''
+    }
+  ];
+  // 和词条列同名的释义槽位（`cat - n.猫 | cat` 里的英文 cat）与词形重复，没有切换意义：
+  // 只要还有别的释义语言就丢掉它，避免一导入就因「上下同名」被拦。
+  const same = (a, b) => String(a).trim().toLowerCase() === String(b).trim().toLowerCase();
+  const allDefKeys = [baseGuess, ...byCount.filter((k) => k !== baseGuess)];
+  const filtered = allDefKeys.filter((k) => !same(k, wordLang));
+  const defKeys = filtered.length ? filtered : allDefKeys;
+  const base = defKeys.includes(baseGuess) ? baseGuess : defKeys[0];
+  const plainSampleText = (plain[0] || {}).definition || '';
+  for (const key of defKeys) {
+    let n = 0;
+    for (const e of entries) {
+      if (e.translations) {
+        if (e.translations[key]) n++;
+      } else if (key === base) {
+        n++;
+      }
+    }
+    slots.push({
+      key,
+      label: key,
+      kind: 'def',
+      base: key === base,
+      count: n,
+      sample: samples.get(key) || (key === base ? plainSampleText : '')
+    });
+  }
+  return { slots, multiLang: byCount.length >= 2 };
+}
+
+/**
+ * 按导入对话框勾选的语言槽位整理词条：
+ * 去掉未勾选语言的译文、把槽位名（可自定义：其他1 / 意大利语…）写成译文键。
+ */
+function applyLangPlan(entries, plan) {
+  const slots = (Array.isArray(plan) ? plan : []).filter((s) => s && typeof s.key === 'string');
+  const wordSlot = slots.find((s) => s.key === '__word__');
+  const defSlots = slots.filter((s) => s.key !== '__word__');
+  if (!wordSlot || !defSlots.length) return null;
+
+  const clean = (v) => String(v == null ? '' : v).trim().slice(0, 20);
+  const wordLang = clean(wordSlot.name) || clean(wordSlot.label) || '未标注语言';
+  const rename = new Map();
+  for (const s of defSlots) {
+    const name = clean(s.name) || clean(s.label) || s.key;
+    rename.set(s.key, name);
+  }
+  const keep = new Set(rename.keys());
+  const baseKept = defSlots.some((s) => s.base);
+
+  const out = entries.map((e) => {
+    const n = { word: e.word, phonetic: e.phonetic, definition: e.definition };
+    if (e.translations) {
+      const t = {};
+      for (const [k, v] of Object.entries(e.translations)) {
+        if (!keep.has(k)) continue;
+        const name = rename.get(k) || k;
+        // 两个槽位改成同一个名字时合并，不静默丢内容
+        t[name] = t[name] ? `${t[name]}；${v}` : v;
+      }
+      if (Object.keys(t).length) n.translations = t;
+    }
+    // 原文释义的槽位被取消勾选：definition 只剩「抄一份剩下的第一种语言」，
+    // 否则它会被当成剩下的那种语言，上下两行显示同一句。
+    if (!baseKept && n.translations) {
+      const first = Object.keys(n.translations)[0];
+      if (first) n.definition = n.translations[first];
+    }
+    return n;
+  });
+
+  const langs = [wordLang, ...defSlots.map((s) => rename.get(s.key))].filter(Boolean);
+  // 上下两行是同一个名字时没有切换意义，直接拦下来（渲染层也会再拦一次）
+  const uniq = new Set(langs.map((x) => x.toLowerCase()));
+  if (uniq.size < langs.length) {
+    throw err('E_LANG_DUP', '词条语言和释义语言不能是同一种，请改名后再导入');
+  }
+  return { entries: out, wordLang, defLang: rename.get(defSlots[0].key), langs };
 }
 
 function parseDictRows(text) {
@@ -130,6 +406,7 @@ function parseDictRows(text) {
   const seen = new Set();
   let firstRaw = null;
   let totalLines = 0;
+  let multiLang = 0;
   for (const line of lines) {
     const t = line.trim();
     if (!t) continue;
@@ -141,20 +418,31 @@ function parseDictRows(text) {
     if (seen.has(key)) continue;
     seen.add(key);
     let definition = row.definition;
-    let phonetic = '';
-    // 形如 "word\t/bʊk/\t书" 的三列：中间列是音标
+    // 读音有两个来源：词尾括号（日文词条）优先，其次是三列表的中间列
+    let phonetic = row.phonetic || '';
+    // 形如 "word\t/bʊk/\t书" 或 "sweat\tswet\tn. 汗" 的三列：中间列是音标
     if (definition.includes('\t')) {
       const parts = definition.split('\t').map((s) => s.trim()).filter(Boolean);
-      if (parts.length >= 2 && /^[/[]/.test(parts[0])) {
+      const phCell =
+        parts.length >= 2 &&
+        !/[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]/.test(parts[0]) &&
+        (/^[/[]/.test(parts[0]) || looksPhonetic(parts[0]));
+      if (parts.length >= 2 && !phonetic && phCell) {
         phonetic = parts[0].replace(/^[/[]|[/\]]$/g, '').trim();
         definition = parts.slice(1).join(' ');
       } else {
         definition = parts.join(' ');
       }
     }
-    entries.push({ word: row.word, phonetic, definition });
+    const translations = splitDefinitionLangs(definition);
+    if (translations) multiLang++;
+    entries.push(
+      translations
+        ? { word: row.word, phonetic, definition, translations }
+        : { word: row.word, phonetic, definition }
+    );
   }
-  return { entries, firstRaw, totalLines };
+  return { entries, firstRaw, totalLines, multiLang };
 }
 
 function blocksToLines(blocks) {
@@ -237,21 +525,34 @@ class ImportService {
     const { blocks, rawText } = await this._parseFile(filePath, buf);
 
     if (mode === 'learn') {
-      const { entries, firstRaw, totalLines } = parseDictRows(rawText);
+      const parsed = parseDictRows(rawText);
+      const { firstRaw, totalLines } = parsed;
       // 词条识别率过低说明这不是一份词库（避免把正文误当词表）
-      const ratio = totalLines ? entries.length / totalLines : 0;
-      if (!entries.length || ratio < 0.5) {
+      const ratio = totalLines ? parsed.entries.length / totalLines : 0;
+      if (!parsed.entries.length || ratio < 0.5) {
         throw err('E_NOT_WORDLIST', '未在该文件中找到词条（需要每行一条：词 + 释义）');
       }
+      const entries = dropLangOutliers(parsed.entries);
       const token = `p_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
       this.pending.set(token, { filePath, entries });
-      const sample = entries.slice(0, 200).map((e) => `${e.word} ${e.definition}`).join('\n');
+      // 学习语言只看「词」这一列，释义语言只看「释义」列：
+      // 混在一起采样时中文释义占比最高，会把英语词库默认标成「中文」，
+      // 而语言决定不显示/标星的分组，标错就会和同语言的内置词库对不上。
+      const wordSample = entries.slice(0, 300).map((e) => e.word).join('\n');
+      const defSample = entries.slice(0, 300).map((e) => e.definition).join('\n');
+      const langInfo = buildLangSlots(entries);
       return {
         kind: 'dict-preview',
         token,
         totalRows: entries.length,
         previewRows: entries.slice(0, 8).map((e) => `${e.word}  ${e.definition}`),
-        languages: detectLanguages(sample),
+        languages: detectLanguages(wordSample),
+        defLanguages: detectLanguages(defSample),
+        // 导入对话框的语言勾选列表：第一项固定是词条列，其余是释义语言
+        langSlots: langInfo.slots,
+        multiLangSupported: langInfo.multiLang,
+        // 有多少条带「多语言释义」（导入后可在设置里切换显示哪种语言的释义）
+        multiLangCount: parsed.multiLang,
         firstRaw
       };
     }
@@ -277,7 +578,7 @@ class ImportService {
     };
   }
 
-  commitDict({ token, name, wordLang, defLang, rows }) {
+  commitDict({ token, name, wordLang, defLang, langPlan, rows }) {
     let entries = null;
     const pending = token ? this.pending.get(token) : null;
     if (pending) entries = pending.entries;
@@ -288,11 +589,17 @@ class ImportService {
     if (!entries || !entries.length) {
       throw err('E_NOT_WORDLIST', '词条数据已失效，请重新导入文件');
     }
+    let plan = null;
+    if (Array.isArray(langPlan) && langPlan.length) {
+      plan = applyLangPlan(entries, langPlan);
+      if (plan) entries = plan.entries;
+    }
     if (token) this.pending.delete(token);
     const { dictId, count } = this.dictService.saveImported({
       name: name || '导入词库',
-      wordLang: wordLang || '',
-      defLang: defLang || '',
+      wordLang: (plan && plan.wordLang) || wordLang || '',
+      defLang: (plan && plan.defLang) || defLang || '',
+      langs: plan ? plan.langs : undefined,
       entries
     });
     return { dictId, count };
@@ -365,4 +672,12 @@ class ImportService {
   }
 }
 
-module.exports = { ImportService, detectLanguages, splitEntryRow, parseDictRows, initFranc };
+module.exports = {
+  ImportService,
+  detectLanguages,
+  splitEntryRow,
+  parseDictRows,
+  buildLangSlots,
+  applyLangPlan,
+  initFranc
+};

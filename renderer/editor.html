@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="UTF-8" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; font-src 'self' data:;" />
+<title>高级编辑</title>
+<link rel="stylesheet" href="./css/editor.css" />
+</head>
+<body>
+
+<!-- 只有两层：一条工具带 + 一整块可以直接打字的地方。
+     没有窗口底色、没有纸张卡片、没有头/底栏 —— 窗口本身就是那张纸。 -->
+<div class="ed">
+  <div class="ed-bar">
+    <button type="button" class="ed-tool" data-cmd="bold" title="加粗 (Ctrl+B)"><b>B</b></button>
+    <button type="button" class="ed-tool" data-cmd="italic" title="斜体 (Ctrl+I)"><i>I</i></button>
+    <button type="button" class="ed-tool" data-cmd="underline" title="下划线 (Ctrl+U)"><u>U</u></button>
+    <button type="button" class="ed-tool" data-cmd="strikeThrough" title="删除线"><s>S</s></button>
+
+    <span class="ed-sep"></span>
+
+    <select class="ed-size" id="edSize" title="字号（选「跟随正文」= 去掉字号）">
+      <option value="">跟随正文</option>
+      <option value="10">10px</option>
+      <option value="12">12px</option>
+      <option value="14">14px</option>
+      <option value="16">16px</option>
+      <option value="18">18px</option>
+      <option value="20">20px</option>
+      <option value="24">24px</option>
+      <option value="28">28px</option>
+      <option value="32">32px</option>
+    </select>
+
+    <!-- 颜色：仿 Office，平时只占一个按钮，点开才出现色板 -->
+    <div class="ed-pop-wrap">
+      <button type="button" class="ed-tool ed-color-btn" id="btnFg"
+              title="字体颜色" aria-haspopup="true" aria-expanded="false">
+        <span class="ed-color-glyph">A<i class="ed-color-bar" id="fgBar"></i></span>
+        <i class="ed-caret" aria-hidden="true"></i>
+      </button>
+      <div class="ed-pop" id="popFg" hidden>
+        <div class="ed-pop-head">字体颜色</div>
+        <div class="ed-grid" id="gridFg"></div>
+        <div class="ed-pop-foot">
+          <button type="button" class="ed-pop-auto" id="fgAuto" title="去掉字体颜色，跟随纸面字色">自动</button>
+          <label class="ed-hex" title="输入十六进制色值，如 d92b2b">
+            <span>#</span><input id="fgHex" type="text" maxlength="7" placeholder="RRGGBB" spellcheck="false" />
+          </label>
+        </div>
+      </div>
+    </div>
+
+    <div class="ed-pop-wrap">
+      <button type="button" class="ed-tool ed-color-btn" id="btnHl"
+              title="突出显示（文字底纹）" aria-haspopup="true" aria-expanded="false">
+        <span class="ed-color-glyph ed-hl-glyph">ab<i class="ed-color-bar" id="hlBar"></i></span>
+        <i class="ed-caret" aria-hidden="true"></i>
+      </button>
+      <div class="ed-pop" id="popHl" hidden>
+        <div class="ed-pop-head">突出显示</div>
+        <div class="ed-grid" id="gridHl"></div>
+        <div class="ed-pop-foot">
+          <button type="button" class="ed-pop-auto" id="hlNone" title="去掉底纹">无颜色</button>
+          <label class="ed-hex" title="输入十六进制色值，如 ffe066">
+            <span>#</span><input id="hlHex" type="text" maxlength="7" placeholder="RRGGBB" spellcheck="false" />
+          </label>
+        </div>
+      </div>
+    </div>
+
+    <!-- 按钮组：窄窗折行时靠右落位（margin-left:auto 在换行后仍然生效） -->
+    <div class="ed-actions">
+      <button type="button" class="ed-btn" id="btnCancel">取消</button>
+      <button type="button" class="ed-btn primary" id="btnSave" title="保存 (Ctrl+S)">保存</button>
+    </div>
+  </div>
+
+  <div class="ed-paper" id="edPaper" contenteditable="true" spellcheck="false"
+       data-placeholder="在这里写…可写一大段，选中文字改字号 / 颜色 / 加粗"></div>
+
+  <div class="ed-toast" id="edToast"></div>
+</div>
+
+<script src="./js/editor.js"></script>
+</body>
+</html>

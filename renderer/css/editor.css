@@ -1,0 +1,384 @@
+/* editor.css —— 高级编辑窗口（v2.1 精简成一块纸）
+   设计原则：
+     · 只有两层 —— 一条工具带 + 一整块能直接打字的纸。没有窗口底色、没有纸张卡片、
+       没有头栏/底栏；窗口本身就是那张纸，所以不存在「背景板」这种东西；
+     · 纸色跟随主程序黑白主题：白天 #ffffff，黑夜 #111827（和桌宠纸面同一组色值）；
+     · 工具带只用一条 1px 细线和正文分开，控件全部 24px 高，尽量不占地方。 */
+:root {
+  /* 原生控件（select / 下拉弹层 / 滚动条 / 输入框光标）跟着主题走。
+     不写这一行，黑夜模式下 <select> 会被浏览器画成白底 —— CSS 的 background
+     盖不住 UA 自己画的那层，只有 color-scheme 能让它整体换成深色。 */
+  color-scheme: light;
+  --ed-paper: #ffffff;
+  --ed-ink: #232b36;
+  --ed-line: #e8e4d8;
+  --ed-sub: #8b909a;
+  --ed-hover: rgba(15, 23, 42, 0.06);
+  --ed-active: rgba(15, 23, 42, 0.12);
+  --ed-btn-line: #d5d7dd;
+  --ed-accent: #1e293b;
+  --ed-accent-ink: #ffffff;
+  --ed-pop: #ffffff;
+  --ed-pop-shadow: 0 8px 24px rgba(15, 23, 42, 0.18);
+  --ed-sel: rgba(37, 99, 235, 0.2);
+}
+
+html[data-theme='dark'] {
+  color-scheme: dark;
+  --ed-paper: #111827;
+  --ed-ink: #e8ecf3;
+  --ed-line: #232c3b;
+  --ed-sub: #8b95a5;
+  --ed-hover: rgba(226, 232, 240, 0.08);
+  --ed-active: rgba(226, 232, 240, 0.15);
+  --ed-btn-line: #2c3543;
+  --ed-accent: #e2e8f0;
+  --ed-accent-ink: #111827;
+  --ed-pop: #161d27;
+  --ed-pop-shadow: 0 10px 26px rgba(0, 0, 0, 0.55);
+  --ed-sel: rgba(96, 165, 250, 0.32);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  font-family: -apple-system, "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif;
+  /* 窗口底色 = 纸色：整扇窗就是一张纸，不再有第二层背景板 */
+  background: var(--ed-paper);
+  color: var(--ed-ink);
+  font-size: 13px;
+  overflow: hidden;
+}
+
+.ed {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ---------------- 工具带（一条，窄窗口下允许折成两行，不会裁字） ---------------- */
+.ed-bar {
+  flex: 0 0 auto;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px;
+  padding: 4px 6px;
+  border-bottom: 1px solid var(--ed-line);
+  background: transparent;
+}
+
+/* 按钮组：一行放得下时被 margin-left:auto 推到右端；窄窗折成两行时独占第二行，
+   auto margin 在新行里同样把它压到右边，不会像之前那样孤零零贴在左下角。 */
+.ed-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: auto;
+}
+
+/* 控件之间的细分隔线：比一整组分隔线更轻 */
+.ed-sep {
+  width: 1px;
+  height: 14px;
+  margin: 0 3px;
+  background: var(--ed-line);
+}
+
+.ed-tool {
+  min-width: 24px;
+  height: 24px;
+  padding: 0 5px;
+  border: 1px solid transparent;
+  background: transparent;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1;
+  color: var(--ed-ink);
+  font-family: inherit;
+}
+
+.ed-tool:hover {
+  background: var(--ed-hover);
+}
+
+.ed-tool:active {
+  background: var(--ed-active);
+}
+
+/* 字号下拉：不能用 transparent —— 原生 select 下面有 UA 自己画的底（白色），
+   只有显式给一个不透明的底色才能跟工具带融为一体。配色靠 color-scheme 切换。 */
+.ed-size {
+  height: 24px;
+  max-width: 92px;
+  margin-left: 2px;
+  border: 1px solid var(--ed-btn-line);
+  border-radius: 4px;
+  background-color: var(--ed-pop);
+  font-size: 11px;
+  color: var(--ed-ink);
+  padding: 0 2px;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+/* 展开的那张列表是系统画的，只能靠 option 的底色 + color-scheme 一起压 */
+.ed-size option {
+  background-color: var(--ed-pop);
+  color: var(--ed-ink);
+}
+
+.ed-color-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 0 4px;
+}
+
+/* 字体颜色 = A + 下面一条色条；突出显示 = ab + 一条更粗的半透明色块 */
+.ed-color-glyph {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.ed-color-bar {
+  display: block;
+  width: 12px;
+  height: 3px;
+  border-radius: 1px;
+  background: #2563eb;
+}
+
+#hlBar {
+  height: 5px;
+  border-radius: 2px;
+  background: rgba(250, 204, 21, 0.62);
+}
+
+.ed-hl-glyph {
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.3px;
+}
+
+.ed-caret {
+  width: 0;
+  height: 0;
+  border-left: 3px solid transparent;
+  border-right: 3px solid transparent;
+  border-top: 4px solid var(--ed-sub);
+}
+
+/* 未保存提示：保存按钮右上角一个小点（绝对定位，不占布局、不推挤按钮） */
+.ed-btn.primary {
+  position: relative;
+}
+
+.ed-btn.primary.dirty::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  right: 3px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #f0b34a;
+}
+
+html[data-theme='dark'] .ed-btn.primary.dirty::after {
+  background: #b45309;
+}
+
+.ed-btn {
+  height: 24px;
+  padding: 0 10px;
+  border: 1px solid var(--ed-btn-line);
+  background: transparent;
+  color: var(--ed-ink);
+  border-radius: 4px;
+  font-size: 12px;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.ed-btn:hover {
+  border-color: var(--ed-sub);
+}
+
+.ed-btn.primary {
+  background: var(--ed-accent);
+  border-color: var(--ed-accent);
+  color: var(--ed-accent-ink);
+}
+
+.ed-btn.primary:hover {
+  filter: brightness(1.12);
+}
+
+/* ---------------- 调色板（点开才出现，仿 Office） ---------------- */
+.ed-pop-wrap {
+  position: relative;
+  display: inline-flex;
+}
+
+.ed-pop {
+  position: absolute;
+  top: calc(100% + 5px);
+  left: 0;
+  z-index: 30;
+  padding: 8px;
+  border: 1px solid var(--ed-line);
+  border-radius: 7px;
+  background: var(--ed-pop);
+  box-shadow: var(--ed-pop-shadow);
+}
+
+.ed-pop[hidden] {
+  display: none;
+}
+
+/* 贴右边界展开（窗口窄、按钮靠右时由 JS 加） */
+.ed-pop.right {
+  left: auto;
+  right: 0;
+}
+
+.ed-pop-head {
+  font-size: 11px;
+  color: var(--ed-sub);
+  margin-bottom: 6px;
+}
+
+.ed-grid {
+  display: grid;
+  grid-template-columns: repeat(8, 17px);
+  gap: 3px;
+}
+
+.ed-cell {
+  width: 17px;
+  height: 17px;
+  padding: 0;
+  border-radius: 3px;
+  border: 1px solid rgba(125, 125, 135, 0.32);
+  cursor: pointer;
+}
+
+.ed-cell:hover {
+  box-shadow: 0 0 0 2px var(--ed-hover);
+}
+
+.ed-pop-foot {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 8px;
+  padding-top: 7px;
+  border-top: 1px solid var(--ed-line);
+}
+
+.ed-pop-auto {
+  border: 1px solid var(--ed-btn-line);
+  background: transparent;
+  color: var(--ed-ink);
+  border-radius: 4px;
+  padding: 2px 7px;
+  font-size: 11px;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.ed-pop-auto:hover {
+  border-color: var(--ed-sub);
+}
+
+.ed-hex {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  border: 1px solid var(--ed-btn-line);
+  border-radius: 4px;
+  padding: 1px 4px;
+  font-size: 11px;
+  color: var(--ed-sub);
+  cursor: text;
+}
+
+.ed-hex input {
+  width: 54px;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--ed-ink);
+  font-size: 11px;
+  font-family: inherit;
+  text-transform: uppercase;
+}
+
+/* ---------------- 纸：占满剩下的整块窗口 ---------------- */
+.ed-paper {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: 12px 14px 18px;
+  background: transparent;
+  color: var(--ed-ink);
+  caret-color: var(--ed-ink);
+  line-height: 1.6;
+  outline: none;
+  word-break: break-word;
+  overflow-wrap: break-word;
+  user-select: text;
+}
+
+.ed-paper::selection,
+.ed-paper *::selection {
+  background: var(--ed-sel);
+}
+
+.ed-paper:empty::before {
+  content: attr(data-placeholder);
+  color: var(--ed-sub);
+  pointer-events: none;
+}
+
+/* ---------------- 取色 / 需要先选字 的临时提示（不占布局） ---------------- */
+.ed-toast {
+  position: fixed;
+  left: 50%;
+  bottom: 12px;
+  transform: translateX(-50%);
+  max-width: 80%;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(30, 41, 59, 0.92);
+  color: #fff;
+  font-size: 11px;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+html[data-theme='dark'] .ed-toast {
+  background: rgba(226, 232, 240, 0.92);
+  color: #111827;
+}
+
+.ed-toast.on {
+  opacity: 1;
+}

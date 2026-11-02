@@ -27,6 +27,8 @@
       this.autoLast = 0;
       this.autoCfg = { enabled: false, pxPerSec: 20 };
       this.settings = { tearThresholdPages: 2 };
+      // 清单模式是否撕纸（false = 只滚动浏览，默认；true = 按阈值撕）
+      this.checklistTear = false;
       this.bound = false;
       this._onMove = null;
       this._onUp = null;
@@ -39,6 +41,23 @@
 
     get scale() {
       return this.engine.getScale ? this.engine.getScale() : 1;
+    }
+
+    /**
+     * 这个模式的纸能不能被撕掉。
+     * 学习 / 休闲是「一条内容一张纸」，撕掉 = 读完了，撕下来的还能回溯。
+     * 清单默认**不撕**：它的每一张纸只是同一个清单的分页视图（第 1 页 = 前几条），
+     * 撕掉一页等于把开头几条藏起来。设置里可以打开「撕纸」（`checklistTear`），
+     * 打开后就和单词模式完全一样：够阈值就撕，撕下来的进回溯栈。
+     */
+    get disposable() {
+      if (this.mode !== 'checklist') return true;
+      return !!this.checklistTear;
+    }
+
+    /** 清单是否允许撕纸（由设置 / 模式切换下发） */
+    setChecklistTear(on) {
+      this.checklistTear = !!on;
     }
 
     setSettings(settings) {
@@ -116,9 +135,17 @@
           const cur = Math.min(engine.shift + dy, cap);
           if (cur <= 0) {
             engine.setShift(0);
+            // 只有一页 / 已经在顶上：给一句提示，别让滚轮看起来像坏了
+            if (dy > 0) this._noticeEmpty();
             return;
           }
           const rem = engine.remainingPapers();
+          if (!this.disposable) {
+            // 清单模式：滚轮只滚动，一张都不撕——往上滚就能回到第一页
+            engine.setShift(cur);
+            if (cur >= cap - 0.5) this._noticeEmpty();
+            return;
+          }
           if (cur >= H) {
             const n = Math.max(1, Math.min(Math.floor(cur / H), Number.isFinite(rem) ? rem : 8));
             engine.setShift(cur);
@@ -163,6 +190,17 @@
       if (engine.shift <= 0.5) {
         engine.setShift(0);
         if (this.hooks.onSettled) this.hooks.onSettled();
+        return;
+      }
+
+      // 清单模式：不撕纸、也不退役，只把位移对齐到整页（滚动看下一段，上滑即回上一页）
+      if (!this.disposable) {
+        const snapped = NS.clamp(Math.round(engine.shift / H) * H, 0, engine.maxShift());
+        const done = () => {
+          if (this.hooks.onSettled) this.hooks.onSettled();
+        };
+        if (Math.abs(snapped - engine.shift) > 0.5) engine.animate(snapped, 160, done);
+        else done();
         return;
       }
 
@@ -236,6 +274,8 @@
       const engine = this.engine;
       const provider = this.provider;
       if (!provider) return 0;
+      // 清单模式禁止撕纸（含自动滚落、回溯里的 flushTear 等所有入口）
+      if (!this.disposable) return 0;
 
       const rem = engine.remainingPapers();
       if (Number.isFinite(rem) && rem <= 0) {
@@ -364,6 +404,17 @@
         if (!this.provider) return;
 
         const engine = this.engine;
+        // 清单模式：自动滚落变成「自动向下浏览」，滚到最后一张就停（不撕纸）
+        if (!this.disposable) {
+          const capS = engine.maxShift();
+          const nxt = Math.min(engine.shift + this.autoCfg.pxPerSec * dt, capS);
+          engine.setShift(nxt);
+          if (nxt >= capS - 0.5) {
+            this.setAutoTear({ enabled: false, pxPerSec });
+            if (this.hooks.onAutoTearStop) this.hooks.onAutoTearStop();
+          }
+          return;
+        }
         const rem = engine.remainingPapers();
         if (Number.isFinite(rem) && rem <= 0) {
           this.setAutoTear({ enabled: false, pxPerSec });
@@ -379,8 +430,12 @@
           engine.setShift(next);
           this.flushTear(1);
         } else if (next >= H && engine.shift < engine.pullCap) {
-          engine.setShift(H);
-          this.tear(1);
+          // 满一张：**静默退役**，和手拉松手结算完全一样（撕掉的纸连着视口底部一起消失，
+          // 屏幕上其余内容一像素不动）。这里不能用 tear()，那会带 220ms 的纸带上滑动画，
+          // 观感就是「滚下去又往上跳一段」。
+          this.flushTear(1); // top + 1，位移减去一张纸高，可见内容零跳变
+          const over = next - H; // 这一帧超出满张的零头，留着继续累
+          engine.setShift(over > 0 ? over : 0);
         } else {
           engine.setShift(next);
         }

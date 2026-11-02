@@ -90,18 +90,21 @@
 
     _flushScope(scope, critical) {
       const payload = this.pending.get(scope);
-      if (!payload) return;
+      if (!payload) return Promise.resolve();
       this.pending.delete(scope);
-      NS.call(window.petAPI.storePatch(scope, payload, { critical })).catch((err) => {
+      // 返回 promise：flush() 需要能等到真正写完（重置数据前必须先落盘旧值）
+      return NS.call(window.petAPI.storePatch(scope, payload, { critical })).catch((err) => {
         console.error('[store] 持久化失败', scope, err);
       });
     }
 
     async flush() {
+      const jobs = [];
       for (const scope of [...this.pending.keys()]) {
         this._cancel(scope);
-        this._flushScope(scope, true);
+        jobs.push(this._flushScope(scope, true));
       }
+      await Promise.all(jobs);
     }
   }
 

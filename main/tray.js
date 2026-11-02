@@ -16,6 +16,18 @@ class TrayService {
     this.wm = windowManager;
     this.resourceDir = resourceDir;
     this.tray = null;
+    // 回溯栈按用户要求只在内存里（重启即空），所以托盘不能用磁盘里的 torn.stack 判断。
+    // 渲染层在撕纸/回溯/切模式后通过 tray:syncBacktrack 上报真实深度，这里只做缓存。
+    this.depths = { learn: 0, leisure: 0, checklist: 0 };
+  }
+
+  /** 渲染层上报「当前模式可回溯几张」 */
+  setBacktrackDepth(mode, depth) {
+    if (!mode || !(mode in this.depths)) return;
+    const n = Math.max(0, Number(depth) || 0);
+    if (this.depths[mode] === n) return;
+    this.depths[mode] = n;
+    this.refresh();
   }
 
   create() {
@@ -60,7 +72,7 @@ class TrayService {
       },
       {
         label: '回溯上一张',
-        enabled: (this.persist.get('torn')[mode] || { stack: [] }).stack.length > 0,
+        enabled: (this.depths[mode] || 0) > 0,
         click: () => this.router.sendAction({ source: 'tray', action: 'backtrack' })
       },
       {

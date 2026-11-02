@@ -95,6 +95,10 @@
           kind = 'placeholder';
           text = block.label || '[内容]';
           fsize = baseFont * 0.92;
+        } else if (type === 'table-row') {
+          // 表格行：纸宽只有 170px，排不了真正的分栏，用全角空格把各列隔开
+          kind = 'table';
+          text = String(block.text || '').replace(/\t+/g, '　');
         } else {
           text = block.text || '';
         }

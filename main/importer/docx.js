@@ -47,6 +47,58 @@ function collectParagraphs(node, out) {
   return out;
 }
 
+/** 表格行：只要当前表的 w:tr，不进嵌套表（嵌套表的文字由所在单元格一并取走） */
+function collectRows(node, out) {
+  if (!node || !node.children) return out;
+  for (const c of node.children) {
+    if (c.tag === 'w:tr') out.push(c);
+    else if (c.tag !== 'w:tbl') collectRows(c, out);
+  }
+  return out;
+}
+
+/** 单元格文本：多段落以空格相连，公式与媒体退化为占位文字 */
+function cellText(tc, rels) {
+  const chunks = [];
+  for (const p of collectParagraphs(tc, [])) {
+    const parts = inlineParts(p, rels);
+    let s = '';
+    for (const part of parts) {
+      if (part.kind === 'text') s += part.value;
+      else if (part.kind === 'formula') s += part.value || '';
+      else if (part.kind === 'media') s += (part.block && part.block.label) || '';
+    }
+    s = sanitize(s).replace(/[ \t]+/g, ' ').replace(/\n+/g, ' ').trim();
+    if (s) chunks.push(s);
+  }
+  return chunks.join(' ');
+}
+
+/**
+ * 文档流：段落与「表格行」按原始顺序排列。
+ * 关键：表格必须按 w:tr 合并成一格一行，否则每个单元格各算一个 w:p，
+ * 一行「词 | 释义」会裂成两条独立内容，词库里就永远配不成对。
+ */
+function collectFlow(node, out, rels) {
+  if (!node) return out;
+  if (node.tag === 'w:p') {
+    out.push({ kind: 'para', node });
+    return out;
+  }
+  if (node.tag === 'w:tbl') {
+    for (const tr of collectRows(node, [])) {
+      const cells = tr.children
+        .filter((c) => c.tag === 'w:tc')
+        .map((tc) => cellText(tc, rels))
+        .filter(Boolean);
+      if (cells.length) out.push({ kind: 'row', cells });
+    }
+    return out;
+  }
+  if (node.children) for (const c of node.children) collectFlow(c, out, rels);
+  return out;
+}
+
 async function readRels(zip) {
   const map = {};
   const file = zip.file('word/_rels/document.xml.rels');
@@ -201,10 +253,19 @@ async function parseDocx(buf) {
 
   const tree = parseXml(xml);
   const body = findFirst(tree, 'w:body') || tree;
-  const paragraphs = collectParagraphs(body, []);
+  const flow = collectFlow(body, [], rels);
   const blocks = [];
 
-  for (const p of paragraphs) {
+  for (const item of flow) {
+    // 表格行：单元格用 \t 相连并原样保留（词库模式靠它切「词 / 释义」）。
+    // 不能走下面的 flushText —— 那里的 replace(/[ \t]+/g, ' ') 会把制表符抹成空格。
+    if (item.kind === 'row') {
+      const text = item.cells.join('\t');
+      if (text.trim()) blocks.push({ type: 'table-row', text });
+      continue;
+    }
+
+    const p = item.node;
     const level = headingLevel(p);
     const parts = inlineParts(p, rels);
     let textBuf = '';

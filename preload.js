@@ -25,6 +25,10 @@ const api = {
   storeGet: () => invoke('store:get'),
   storePatch: (scope, partial, opts) =>
     invoke('store:patch', { scope, partial, critical: !!(opts && opts.critical) }),
+  storeReset: (scope) => invoke('store:reset', { scope }),
+
+  /* ---- 托盘状态同步（内存态，非持久化） ---- */
+  traySyncBacktrack: (mode, depth) => send('tray:syncBacktrack', { mode, depth }),
 
   /* ---- 导入 ---- */
   importPickFile: (mode) => invoke('import:pickFile', { mode }),
@@ -42,12 +46,18 @@ const api = {
   dictListAll: () => invoke('dict:listAll'),
   dictGetEntries: (dictId, offset, count) => invoke('dict:getEntries', { dictId, offset, count }),
   dictRemove: (dictId) => invoke('dict:remove', { dictId }),
+  dictSetLang: (dictId, wordLang, defLang) => invoke('dict:setLang', { dictId, wordLang, defLang }),
 
   /* ---- 快捷键 ---- */
   shortcutSet: (action, accelerator, scope) => invoke('shortcut:set', { action, accelerator, scope }),
   shortcutGetAll: () => invoke('shortcut:getAll'),
   shortcutCaptureHint: () => send('shortcut:captureHint'),
   shortcutSetEditing: (editing) => send('shortcut:editing', { editing }),
+
+  /* ---- 清单富文本编辑（独立窗口） ---- */
+  editorOpen: (payload) => invoke('editor:open', payload || {}),
+  /** 主题跟着纸面走：编辑器开着时切黑夜模式，窗口里的纸也要立刻变黑 */
+  editorTheme: (dark) => send('editor:theme', { dark: !!dark }),
 
   /* ---- 应用 ---- */
   quitApp: () => send('app:quit'),
@@ -64,6 +74,12 @@ const api = {
     const handler = (_e, ev) => cb(ev);
     ipcRenderer.on('app:notice', handler);
     return () => ipcRenderer.removeListener('app:notice', handler);
+  },
+  /** 独立编辑窗口保存后回传（主进程转发，不直接读写磁盘） */
+  onChecklistSave(cb) {
+    const handler = (_e, ev) => cb(ev);
+    ipcRenderer.on('checklist:save', handler);
+    return () => ipcRenderer.removeListener('checklist:save', handler);
   }
 };
 
@@ -80,14 +96,15 @@ api.window = {
   getBounds: api.getBounds,
   setPanel: api.setPanel
 };
-api.store = { get: api.storeGet, patch: api.storePatch };
+api.store = { get: api.storeGet, patch: api.storePatch, reset: api.storeReset };
 api.doc = { list: api.docList, getBlocks: api.docGetBlocks, remove: api.docRemove };
 api.dict = {
   listBuiltin: api.dictListBuiltin,
   listImported: api.dictListImported,
   listAll: api.dictListAll,
   getEntries: api.dictGetEntries,
-  remove: api.dictRemove
+  remove: api.dictRemove,
+  setLang: api.dictSetLang
 };
 api.shortcut = { set: api.shortcutSet, getAll: api.shortcutGetAll, captureHint: api.shortcutCaptureHint };
 api.importer = {

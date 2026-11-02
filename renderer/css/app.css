@@ -4,6 +4,9 @@
    ========================================================== */
 
 :root {
+  /* 原生控件（下拉框 / 展开的列表 / 滚动条 / 数字框箭头）跟着主题走。
+     只写 background 不够：select 的底和弹层是 UA 画的，得靠 color-scheme 才能变深。 */
+  color-scheme: light;
   --page-height: 200px;
   --page-width: 170px;
   --ink: #1e293b;
@@ -22,9 +25,16 @@
   --star: #d97706;
   --def-size: 13px;
   --shadow: 0 6px 26px rgba(15, 23, 42, 0.18);
+  /* 卷筒配色：SVG 里的 fill/stroke 是写死的白纸色，黑夜模式必须由 CSS 覆盖，
+     否则「纸变黑了、卷筒还是白的一块」 */
+  --roll-body: #ffffff;
+  --roll-ink: #1e293b;
+  --roll-core: #e2e8f0;
+  --roll-dash: #94a3b8;
 }
 
 html[data-theme='dark'] {
+  color-scheme: dark;
   --ink: #e5e7eb;
   --ink-soft: #cbd5e1;
   --ink-mute: #94a3b8;
@@ -40,6 +50,11 @@ html[data-theme='dark'] {
   --danger: #f87171;
   --star: #fbbf24;
   --shadow: 0 6px 26px rgba(0, 0, 0, 0.5);
+  /* 黑夜模式：卷筒跟着纸一起变黑（不是纯黑，留一点层次才看得出圆柱） */
+  --roll-body: #1e2530;
+  --roll-ink: #cbd5e1;
+  --roll-core: #374151;
+  --roll-dash: #3f4a5a;
 }
 
 * {
@@ -126,6 +141,28 @@ body {
   height: 100%;
   z-index: 10;
   pointer-events: none;
+}
+
+/* ---------- 卷筒配色参数化（结构不动，只覆盖 SVG 表现属性） ----------
+   SVG 里写的是 fill="#FFFFFF" / stroke="#1E293B" 这类表现属性，
+   优先级低于任何 CSS 声明，所以这里可以直接换色，且不违反「造型层结构禁区」。 */
+.roll-layer g {
+  stroke: var(--roll-ink);
+}
+.roll-layer path[fill]:not([fill='none']) {
+  fill: var(--roll-body);
+}
+.roll-layer ellipse[fill='#FFFFFF' i] {
+  fill: var(--roll-body);
+}
+.roll-layer ellipse[fill='#E2E8F0' i] {
+  fill: var(--roll-core);
+}
+.roll-layer text[fill] {
+  fill: var(--roll-ink);
+}
+.roll-layer pattern line {
+  stroke: var(--roll-dash);
 }
 
 .drag-zone {
@@ -257,6 +294,15 @@ body {
   white-space: nowrap;
   letter-spacing: -0.01em;
 }
+/* 超长单词：允许折行，宁可字号小一点也不裁掉词尾（验收 2）。
+   注意不能给 overflow:hidden —— 那会把最后一行露头的字母切掉，宁可让极端长词
+   稍微压到释义，也不能丢字（字号已按行数预先缩小）。 */
+.word-main.word-long {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  line-height: 1.06;
+}
 .word-main .star {
   color: var(--star);
   font-size: 0.8em;
@@ -336,6 +382,10 @@ body {
   border: 1px solid var(--ink-mute);
   border-radius: 2px;
   position: relative;
+}
+/* 续页（一个条目被分页切开的后半段）：勾选框留白，避免看起来像多了一条 */
+.cl-item .cl-box.cont {
+  visibility: hidden;
 }
 .cl-item.done .cl-box::after {
   content: '✓';
@@ -519,6 +569,125 @@ html[data-theme='dark'] .sp-head {
   font-weight: 700;
   font-variant-numeric: tabular-nums;
 }
+
+/* 语言设置：两个下拉并排一行（标题在上、控件占满半格），下面跟「刷新纸面」 */
+.sp-lang-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  padding: 4px 0 5px;
+}
+.sp-lang-cell {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.sp-lang-cell > span {
+  font-size: 10.5px;
+  color: var(--panel-sub);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+.sp-lang-cell > select {
+  width: 100%;
+  min-width: 0;
+}
+/* 对调按钮：夹在两个下拉中间的小方钮，高度与下拉齐平，不挤占下拉宽度 */
+.sp-lang-swap {
+  flex: 0 0 auto;
+  align-self: flex-end;
+  width: 26px;
+  height: 24px;
+  padding: 0;
+  line-height: 1;
+  font-size: 12px;
+  border-radius: 6px;
+  color: var(--panel-sub);
+}
+.sp-lang-swap:hover:not(:disabled) {
+  color: var(--panel-ink);
+  border-color: var(--accent);
+}
+.sp-lang-swap:disabled {
+  opacity: 0.4;
+}
+.sp-lang-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 1px 0 3px;
+}
+.sp-lang-actions .btn {
+  min-width: 92px;
+}
+.sp-lang-state {
+  font-size: 10.5px;
+  color: var(--panel-sub);
+}
+.sp-lang-state.dirty {
+  color: var(--accent);
+  font-weight: 700;
+}
+
+/* 导入对话框的语言槽位：勾选 + 可改的名字 + 示例/条数 */
+.imp-lang-box {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 3px 0 4px;
+}
+.imp-lang-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.imp-lang-row > input[type='checkbox'] {
+  flex: 0 0 auto;
+  width: 13px;
+  height: 13px;
+  accent-color: var(--accent);
+  margin: 0;
+}
+.imp-lang-tag {
+  flex: 0 0 auto;
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--panel-sub);
+  width: 22px;
+}
+.imp-lang-row > input[type='text'].imp-lang-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  width: auto;
+  padding: 3px 6px;
+  font-size: 11.5px;
+}
+.imp-lang-other {
+  flex: 0 0 auto;
+  min-width: 0;
+  padding: 3px 7px;
+  font-size: 10.5px;
+  line-height: 1.3;
+}
+span.imp-lang-other {
+  width: 34px;
+}
+.imp-lang-meta {
+  flex: 0 0 auto;
+  max-width: 96px;
+  font-size: 10px;
+  color: var(--panel-sub);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.imp-lang-err {
+  color: var(--danger, #c0392b);
+  min-height: 14px;
+}
 input[type='range'] {
   flex: 1 1 auto;
   min-width: 0;
@@ -655,6 +824,50 @@ select:focus {
   color: var(--panel-sub);
   text-align: center;
   font-size: 11px;
+}
+/* 折叠列表：默认收起，点标题展开 */
+.sp-fold {
+  border: 1px solid var(--ink-mute);
+  border-radius: 7px;
+  overflow: hidden;
+  background: var(--panel-bg);
+  margin-top: 4px;
+}
+.sp-fold-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  font-size: 11.5px;
+  cursor: pointer;
+  user-select: none;
+}
+.sp-fold-head:hover {
+  background: var(--panel-field);
+}
+.sp-fold-arrow {
+  flex: 0 0 auto;
+  width: 0;
+  height: 0;
+  margin: 0 3px 0 2px;
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+  border-left: 5px solid var(--panel-sub);
+  transition: transform 0.15s ease;
+}
+.sp-fold.open .sp-fold-arrow {
+  transform: rotate(90deg);
+}
+.sp-fold-body {
+  border-top: 1px solid var(--panel-field);
+}
+.sp-fold-body.collapsed {
+  display: none;
+}
+.sp-fold-body .sp-list {
+  border: none;
+  border-radius: 0;
+  max-height: 168px;
 }
 .sp-kbd {
   display: inline-block;

@@ -1,10 +1,13 @@
-/* interaction-layer.js —— 鼠标穿透判定（白名单注册制）+ 右键分发 */
+/* interaction-layer.js —— 鼠标穿透判定（白名单）+ 右键分发 */
 (function (global) {
   'use strict';
   const NS = global.XZ;
 
   class InteractionLayer {
     constructor() {
+      // ★ 可交互元素白名单集中在这里。新增浮层 UI 时请一并把选择器加进来，
+      //   否则该区域会被判定成「透明区」，鼠标直接穿透到下面的桌面。
+      //   （旧版提供的 registerHitTarget() 从未被任何模块调用，已删除以免误导。）
       this.selectors = [
         '.viewport',
         '.drag-zone',
@@ -20,11 +23,6 @@
       this.forced = false;
       this._raf = 0;
       this._lastEvent = null;
-    }
-
-    /** 新增可交互元素必须登记，否则会出现穿透 bug */
-    registerHitTarget(selector) {
-      if (!this.selectors.includes(selector)) this.selectors.push(selector);
     }
 
     attach() {

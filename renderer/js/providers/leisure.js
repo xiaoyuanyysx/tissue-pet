@@ -21,9 +21,12 @@
       return this.plans.length;
     }
 
+    /* applyState 只同步「期望打开的文档」，绝不写 this.docId。
+       this.docId 的唯一语义是「当前已加载进内存的文档」——一旦在此处提前赋值，
+       ensureLoaded 里的 docId === this.docId 会恒成立，切换资料后永远不重新加载。 */
     applyState(leisureState) {
-      this.docId = leisureState.activeDocId || null;
-      const meta = (leisureState.docs || []).find((d) => d.docId === this.docId);
+      const want = leisureState.activeDocId || null;
+      const meta = (leisureState.docs || []).find((d) => d.docId === want);
       this.docName = meta ? meta.name : '';
     }
 

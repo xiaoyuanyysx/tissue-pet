@@ -43,20 +43,34 @@ function defaultState() {
       maxBacktrack: 10,
       // 「最多保留 N 张可回溯」提示：每次启动最多提示一次，可在此关闭
       notifyBacktrackLimit: true,
+      // 清单循环浏览：纸带无限，拉到底接回第一页（与单词模式的轮次一致）
+      checklistLoop: true,
+      // 清单自动序号：按添加顺序在纸面上标 1. 2. 3.
+      checklistNumbering: false,
+      // 清单不撕纸：默认开（清单的纸只是同一个清单的分页视图，撕掉就看不见开头几条）；
+      // 关掉后按「撕纸阈值」一张张撕，和单词模式一致
+      checklistNoTear: true,
       autoTear: { enabled: false, pxPerSec: 20 },
       shortcuts: defaultShortcuts(),
       windowPos: { displayId: -1, x: null, y: null },
       // 设置中心相对默认位置（右上角）的偏移，拖动后记住
-      panelPos: { x: 0, y: 0 }
+      panelPos: { x: 0, y: 0 },
+      // 高级编辑窗口上次被拉到多大（默认就是最小号 300×240）
+      editorWindow: { width: 300, height: 240 }
     },
     learn: {
       currentDictId: 'cet4',
       headEntryIndex: 0,
-      hidden: [],
-      starred: [],
+      // 不显示 / 标星按「语言」分组：{ en: ['book'], ja: [...] }
+      // 同一语言的不同词库共用一套（四级和雅思的英文词互认），不同语言互不影响
+      hidden: {},
+      starred: {},
       shuffle: false,
       roundSeed: 20261025,
-      hideDefinition: false
+      hideDefinition: false,
+      // 手选的语言对：{ cet4: { word: '英语', def: '中文' } }
+      // 导入后可随时改，主进程以它为准（优先于自动识别），释义语言决定纸面显示哪种释义
+      dictLang: {}
     },
     leisure: {
       activeDocId: null,
@@ -102,12 +116,19 @@ function fillDefaults(target, def) {
 }
 
 class PersistService {
-  constructor(dir) {
+  /**
+   * @param {string} dir userData 目录
+   * @param {{ langOfDict?: (dictId: string) => string }} [opts]
+   *   langOfDict 用于把老版本的「全局 hidden/starred 数组」迁移到当前词库所属语言下
+   */
+  constructor(dir, opts = {}) {
     this.dir = dir;
+    this.langOfDict = typeof opts.langOfDict === 'function' ? opts.langOfDict : () => 'unknown';
     this.state = defaultState();
     this.dirty = new Set();
     this.timers = new Map();
     this.warnings = [];
+    this.migrated = new Set();
   }
 
   init() {
@@ -120,6 +141,15 @@ class PersistService {
     for (const scope of SCOPES) {
       const loaded = this._readScope(scope, def[scope]);
       this.state[scope] = loaded;
+    }
+    // 结构迁移（learn.hidden 数组 → 按语言分组）只在内存生效会把旧结构留在盘上，
+    // 导致每次启动重复迁移；这里把结果落盘一次
+    for (const scope of this.migrated) {
+      try {
+        this._write(scope);
+      } catch {
+        /* 写失败不影响本次运行 */
+      }
     }
     return this;
   }
@@ -183,6 +213,33 @@ class PersistService {
       a.pxPerSec = Math.min(200, Math.max(2, Number(a.pxPerSec) || 20));
       a.enabled = !!a.enabled;
     }
+    if (scope === 'learn') {
+      // 老版本：hidden / starred 是「全应用一份」的数组，换词库会串。
+      // 新结构按语言分组，这里把旧数组整体归到当前词库所属语言下（不丢数据）。
+      const lang = this.langOfDict(String(data.currentDictId || 'cet4'));
+      for (const key of ['hidden', 'starred']) {
+        const old = raw && raw[key];
+        if (Array.isArray(old)) {
+          const words = old.filter((w) => typeof w === 'string' && w);
+          data[key] = words.length ? { [lang]: words } : {};
+          // 语言都判不出来（词库文件不在场）时先别落盘：保留旧结构，等下次能用上真实词库再迁移
+          if (lang !== 'unknown') this.migrated.add(scope);
+          if (words.length) {
+            this.warnings.push(
+              `「${key === 'hidden' ? '不显示词' : '标星词'}」已改为按语言分组，${words.length} 条旧记录归入当前词库的语言`
+            );
+          }
+        } else if (!isPlainObject(data[key])) {
+          data[key] = {};
+        } else {
+          const clean = {};
+          for (const k of Object.keys(data[key])) {
+            if (Array.isArray(data[key][k])) clean[k] = data[key][k].filter((w) => typeof w === 'string' && w);
+          }
+          data[key] = clean;
+        }
+      }
+    }
     return data;
   }
 
@@ -227,6 +284,17 @@ class PersistService {
       this._schedule(scope);
     }
     return null;
+  }
+
+  /** 把某个分区整体恢复成默认值并立即落盘（清空全部数据 = 对 5 个分区各调一次） */
+  reset(scope) {
+    const def = defaultState()[scope];
+    if (!def) throw Object.assign(new Error('非法的数据分区'), { code: 'E_SCOPE_INVALID' });
+    this._cancelTimer(scope);
+    this.state[scope] = JSON.parse(JSON.stringify(def));
+    this.dirty.add(scope);
+    this._write(scope);
+    return this.state[scope];
   }
 
   _cancelTimer(scope) {

@@ -170,10 +170,18 @@
       return sel;
     }
 
+    /** 并排的「小标题 + 下拉」单元：标题在上、控件占满整格，两个并排也不挤 */
+    _langCell(caption, select) {
+      const cell = el('div', 'sp-lang-cell');
+      cell.appendChild(el('span', null, caption));
+      cell.appendChild(select);
+      return cell;
+    }
+
     _btn(label, onClick, cls) {
       const b = el('button', `btn ${cls || ''}`.trim(), label);
       b.type = 'button';
-      b.addEventListener('click', onClick);
+      if (onClick) b.addEventListener('click', onClick);
       return b;
     }
 
@@ -417,30 +425,331 @@
         label: `${d.name}${d.builtin ? '' : '（导入）'} · ${d.count}`
       }));
       if (!dictOptions.length) dictOptions.push({ value: '', label: '没有可用词库' });
-      sec.appendChild(
-        this._row('词库', [
-          this._select(dictOptions, learn.currentDictId, (v) => this.app.switchDict(v))
-        ])
-      );
+      const curMeta = (this.dicts || []).find((d) => d.id === learn.currentDictId);
+      const dictNodes = [this._select(dictOptions, learn.currentDictId, (v) => this.app.switchDict(v))];
+      if (curMeta && !curMeta.builtin) {
+        dictNodes.push(this._btn('删除', () => this.app.removeDict(curMeta.id), 'sm danger'));
+      }
+      const dictRow = this._row('词库', dictNodes);
+      dictNodes[0].classList.add('grow');
+      sec.appendChild(dictRow);
       const btnRow = el('div', 'sp-row');
       btnRow.appendChild(this._btn('导入词库…', () => this.app.importDict(), 'ghost'));
-      btnRow.appendChild(this._btn('管理不显示/标星', () => this.app.openSettings('mode'), 'ghost'));
+      btnRow.appendChild(this._btn('重置进度…', () => this.app.resetLearnProgress(), 'ghost'));
       sec.appendChild(btnRow);
+      sec.appendChild(this._hint('只回到第一张纸，标星词与不显示词都会保留。'));
       sec.appendChild(this._switchRow('打乱模式（每轮重洗）', !!learn.shuffle, (v) => this.app.setLearnOption('shuffle', v)));
       sec.appendChild(
         this._switchRow('隐藏释义（单击纸显示）', !!learn.hideDefinition, (v) =>
           this.app.setLearnOption('hideDefinition', v)
         )
       );
-      body.appendChild(sec);
 
-      const listSec = this._sec(`不显示词（${(learn.hidden || []).length}）`);
-      listSec.appendChild(this._wordList(learn.hidden || [], '显示', (w) => this.app.toggleHidden(w)));
+      /* 语言：导入时选的语言事后可改，不必重导。
+         两个下拉并排一行，改完点「刷新纸面」才真正生效——每动一下就重读词库
+         会连纸带一起重建，手感很跳；刷新只重绘、不动纸张进度。 */
+      let langSec = null;
+      if (curMeta) {
+        const LANG_CHOICES = ['英语', '中文', '日语', '韩语', '俄语', '法语', '德语', '西班牙语'];
+        const curWord = curMeta.wordLang || '';
+        const curDef = curMeta.defLang || '';
+        const defLangs = Array.isArray(curMeta.defLangs) ? curMeta.defLangs : [];
+        // 词库实际带哪些语言（导入时勾选的槽位，含「其他1 / 意大利语」这类自定义名）
+        const dictLangs =
+          Array.isArray(curMeta.langs) && curMeta.langs.length
+            ? curMeta.langs.filter(Boolean)
+            : [...new Set([curMeta.srcWordLang, curWord, curDef, ...defLangs].filter(Boolean))];
+        const ALL = [...new Set([...dictLangs, ...LANG_CHOICES].filter(Boolean))];
+
+        let pendWord = curWord || ALL[0] || '英语';
+        let pendDef = curDef;
+        // 上下不能是同一语言：老数据存成相同值时，自动挪到另一种语言
+        if (!pendDef || pendDef === pendWord) {
+          pendDef = ALL.find((v) => v !== pendWord) || '';
+        }
+
+        langSec = this._sec(`语言${curMeta.langOverridden ? '（已手改）' : ''}`);
+
+        const stateEl = el('span', 'sp-lang-state', '');
+        const refreshBtn = this._btn(
+          '刷新纸面',
+          () => {
+            if (refreshBtn.disabled) return;
+            refreshBtn.disabled = true;
+            stateEl.textContent = '正在刷新…';
+            stateEl.classList.remove('dirty');
+            this.app
+              .applyDictLang(learn.currentDictId, pendWord, pendDef)
+              .then((ok) => {
+                // 有改动时面板会整体重建，旧节点已失效，反馈交给 toast
+                if (!stateEl.isConnected) return;
+                if (ok) {
+                  stateEl.textContent = '已应用，进度保持';
+                  stateEl.classList.remove('dirty');
+                } else {
+                  stateEl.textContent = '刷新失败，请重试';
+                  stateEl.classList.add('dirty');
+                }
+              })
+              .catch(() => {
+                if (stateEl.isConnected) stateEl.textContent = '刷新失败，请重试';
+              })
+              .finally(() => {
+                refreshBtn.disabled = false;
+              });
+          },
+          'primary'
+        );
+        const markDirty = () => {
+          const changed = pendWord !== curWord || pendDef !== curDef;
+          stateEl.textContent = changed ? '有改动，点刷新生效' : '';
+          stateEl.classList.toggle('dirty', changed);
+        };
+
+        /* 两个下拉互斥：各自只列「另一种语言没占用」的选项，从根上杜绝上下相同。
+           词库里没有内容的语言也列出来但标「无内容」——手改语言标签
+           （比如法语词库被识别成英语）时还能纠正分组，只是纸面会回落原文。 */
+        const hasContent = (v) => dictLangs.includes(v);
+        const optionsFor = (exclude) =>
+          ALL.filter((v) => v !== exclude).map((v) => ({
+            v,
+            label: hasContent(v) ? v : `${v}（无内容）`
+          }));
+        const fillSel = (sel, list, val) => {
+          sel.innerHTML = '';
+          let opts = list;
+          if (val && !opts.some((o) => o.v === val)) opts = [...opts, { v: val, label: val }];
+          for (const o of opts) {
+            const op = document.createElement('option');
+            op.value = o.v;
+            op.textContent = o.label;
+            sel.appendChild(op);
+          }
+          sel.value = val || (opts[0] ? opts[0].v : '');
+        };
+        const wordSel = document.createElement('select');
+        const defSel = document.createElement('select');
+        const refreshSel = () => {
+          const pair = ALL.length >= 2;
+          fillSel(wordSel, pair ? optionsFor(pendDef) : ALL.map((v) => ({ v, label: v })), pendWord);
+          fillSel(defSel, pair ? optionsFor(pendWord) : ALL.map((v) => ({ v, label: v })), pendDef);
+          if (refreshEmpty) refreshEmpty();
+        };
+        let refreshEmpty = null;
+        wordSel.addEventListener('change', () => {
+          const v = wordSel.value;
+          if (v === pendDef) pendDef = pendWord; // 兜底：真撞上了就互换
+          pendWord = v;
+          refreshSel();
+          markDirty();
+        });
+        defSel.addEventListener('change', () => {
+          const v = defSel.value;
+          if (v === pendWord) pendWord = pendDef;
+          pendDef = v;
+          refreshSel();
+          markDirty();
+        });
+        refreshSel();
+
+        /* 一键对调：右上角「⇄」把上下的语言直接互换并立刻生效。
+           和「刷新纸面」的分工——下拉改选走刷新（可以先改两个再一起应用），
+           对调只是一次交换，点一下就落地，省掉「改成 B / 再改成 A」两步。
+           纸面进度由 applyDictLang 兜底保留；交换期间加锁，
+           否则连点两次会让两次写盘交错、上下又变回原样。 */
+        let swapBusy = false;
+        const swapBtn = this._btn('⇄', null, 'swap sp-lang-swap');
+        swapBtn.title = '交换上下（点一下立即生效，进度保留）';
+        swapBtn.setAttribute('aria-label', '交换学习语言与释义语言');
+        swapBtn.disabled = ALL.length < 2;
+        swapBtn.addEventListener('click', async () => {
+          if (swapBusy || swapBtn.disabled) return;
+          const w = pendDef;
+          const d = pendWord;
+          if (!w || w === d) return; // 只有一种语言、或下方为空时没得换
+          pendWord = w;
+          pendDef = d;
+          refreshSel();
+          markDirty();
+          swapBusy = true;
+          swapBtn.disabled = true;
+          stateEl.textContent = '正在交换…';
+          stateEl.classList.remove('dirty');
+          try {
+            // silent：成功提示由这里统一给，避免「已改为 / 已对调」两条 toast 打架
+            const ok = await this.app.applyDictLang(learn.currentDictId, w, d, { silent: true });
+            if (ok) this.app.toast.info(`已对调：上「${w}」下「${d}」`);
+            // 有改动时面板会整体重建，旧节点失效，反馈交给 toast
+            if (!stateEl.isConnected) return;
+            stateEl.textContent = ok ? `已交换：上「${w}」下「${d}」` : '交换失败，请重试';
+            stateEl.classList.toggle('dirty', !ok);
+          } catch {
+            if (stateEl.isConnected) {
+              stateEl.textContent = '交换失败，请重试';
+              stateEl.classList.add('dirty');
+            }
+          } finally {
+            swapBusy = false;
+            swapBtn.disabled = false;
+          }
+        });
+
+        const langRow = el('div', 'sp-lang-row');
+        langRow.appendChild(this._langCell('学习语言（上）', wordSel));
+        langRow.appendChild(swapBtn);
+        langRow.appendChild(this._langCell('释义语言（下）', defSel));
+        langSec.appendChild(langRow);
+
+        // 选了词库里没有的语言时明说一句，否则纸面看起来「换了没反应」
+        const emptyEl = el('div', 'sp-hint sp-lang-empty', '');
+        refreshEmpty = () => {
+          const miss = [];
+          if (pendWord && !hasContent(pendWord)) miss.push(`上方「${pendWord}」`);
+          if (pendDef && !hasContent(pendDef)) miss.push(`下方「${pendDef}」`);
+          emptyEl.textContent = miss.length ? `${miss.join('、')}在这本词库里没有内容，该行会回落原文。` : '';
+        };
+        refreshEmpty();
+        langSec.appendChild(emptyEl);
+
+        const acts = el('div', 'sp-lang-actions');
+        acts.appendChild(refreshBtn);
+        acts.appendChild(stateEl);
+        langSec.appendChild(acts);
+
+        langSec.appendChild(
+          this._hint(
+            '上方取「学习语言」的内容，下方取「释义语言」的内容；两种语言不能相同，所以对调后纸面上下就真的互换了。'
+          )
+        );
+        langSec.appendChild(
+          this._hint('下拉之间的小「⇄」是对调按钮：点一下就把上下互换并立即生效，进度不动。')
+        );
+        langSec.appendChild(
+          this._hint('「标星 / 不显示」跟着学习语言分组保存，同一语言的不同词库共用一份。')
+        );
+        langSec.appendChild(
+          this._hint(
+            dictLangs.length > 2
+              ? `该词库有 ${dictLangs.join(' / ')}（共 ${dictLangs.length} 种）可放到上下两行；某一行没有该语言时回落原文。`
+              : `该词库只有 ${dictLangs.join(' / ') || '两种'} 两种语言；导入带多语言内容的词表（如「apple - n.苹果 / りんご」）后可自由配对。`
+          )
+        );
+        langSec.appendChild(
+          this._hint('语言名（含「其他1 / 其他2」）在导入时确定；要改名请重新导入该词表。')
+        );
+      }
+      body.appendChild(sec);
+      if (langSec) body.appendChild(langSec);
+
+      /* 词库管理：导入的词库以前只能去 userData/dicts/ 手删，这里给个入口 */
+      const imported = (this.dicts || []).filter((d) => !d.builtin);
+      const mgmtSec = this._sec(`词库管理（导入 ${imported.length}）`);
+      if (!imported.length) {
+        mgmtSec.appendChild(this._hint('暂无导入词库；内置词库不可删除。'));
+      } else {
+        const box = el('div', 'sp-list');
+        for (const d of imported) {
+          const item = el('div', 'sp-list-item');
+          const isCur = d.id === learn.currentDictId;
+          const name = el('span', 'ell', `${d.name} · ${d.count} 条`);
+          name.title = `${d.name} · ${d.count} 条${d.wordLang ? ` · ${d.wordLang}` : ''}${isCur ? ' · 当前使用' : ''}`;
+          item.appendChild(name);
+          if (isCur) {
+            const tag = el('span', null, '使用中');
+            tag.style.fontSize = '10px';
+            tag.style.color = 'var(--ink-mute)';
+            tag.style.flex = '0 0 auto';
+            item.appendChild(tag);
+          }
+          item.appendChild(this._btn('删除', () => this.app.removeDict(d.id), 'sm danger'));
+          box.appendChild(item);
+        }
+        mgmtSec.appendChild(box);
+        mgmtSec.appendChild(
+          this._hint('删除当前词库会自动切回内置词库；标星词与不显示词按语言保存，不会一起删掉。')
+        );
+      }
+      body.appendChild(mgmtSec);
+
+      /* 不显示 / 标星按「语言」分组：这里只列「当前词库语言」这一份，其余语言给出条数提示 */
+      // 语言从词库列表反查，这样停在休闲/清单模式时打开设置也能显示正确的一份
+      const lp = this.app.providers.learn;
+      const curDict = (this.dicts || []).find((d) => d.id === learn.currentDictId);
+      const lang = (curDict && curDict.lang) || lp.lang || 'unknown';
+      const langName = (curDict && curDict.wordLang) || lp.langLabel || '未标注语言';
+      const group = (map) =>
+        map && !Array.isArray(map) && Array.isArray(map[lang]) ? map[lang] : [];
+      const otherCount = (map) => {
+        if (!map || Array.isArray(map)) return 0;
+        return Object.keys(map).reduce(
+          (s, k) => s + (k === lang ? 0 : Array.isArray(map[k]) ? map[k].length : 0),
+          0
+        );
+      };
+
+      /* 同一语言的词库共用一份集合，但「四级标过、雅思没有」的词在本词库里永远抽不到，
+         原样列出来会让人以为切换词库时串了。这里把它们折成一行计数。
+         只有 learn provider 正持有当前词库时才能判断，否则一律按全部显示。 */
+      const curWords =
+        lp.dictId && lp.dictId === learn.currentDictId && lp.entries.length
+          ? new Set(lp.entries.map((e) => String(e.word || '').toLowerCase()))
+          : null;
+      const hasCur = (w) => !curWords || curWords.has(String(w).toLowerCase());
+      const splitByDict = (list) => ({
+        here: list.filter(hasCur),
+        stale: curWords ? list.filter((w) => !hasCur(w)) : []
+      });
+
+      const hiddenSplit = splitByDict(group(learn.hidden));
+      const listSec = this._sec(`不显示词（${hiddenSplit.here.length} · ${langName}）`);
+      listSec.appendChild(this._hint(`仅对「${langName}」词库生效；同一语言的不同词库共用这一份。`));
+      listSec.appendChild(
+        this._foldList(hiddenSplit.here, '显示', (w) => this.app.toggleHidden(w), '个不显示词')
+      );
+      if (hiddenSplit.stale.length) {
+        listSec.appendChild(
+          this._hint(`另有 ${hiddenSplit.stale.length} 个词不在当前词库（切到包含它们的词库时仍然生效）。`)
+        );
+      }
+      const hiddenOther = otherCount(learn.hidden);
+      if (hiddenOther) listSec.appendChild(this._hint(`其他语言另有 ${hiddenOther} 条，切换过去才会显示。`));
       body.appendChild(listSec);
 
-      const starSec = this._sec(`标星词（${(learn.starred || []).length}）`);
-      starSec.appendChild(this._wordList(learn.starred || [], '取消标星', (w) => this.app.toggleStar(w)));
+      const starSplit = splitByDict(group(learn.starred));
+      const starSec = this._sec(`标星词（${starSplit.here.length} · ${langName}）`);
+      starSec.appendChild(
+        this._foldList(starSplit.here, '取消标星', (w) => this.app.toggleStar(w), '个标星词')
+      );
+      if (starSplit.stale.length) {
+        starSec.appendChild(
+          this._hint(`另有 ${starSplit.stale.length} 个词不在当前词库（切到包含它们的词库时仍然生效）。`)
+        );
+      }
+      const starOther = otherCount(learn.starred);
+      if (starOther) starSec.appendChild(this._hint(`其他语言另有 ${starOther} 条，切换过去才会显示。`));
       body.appendChild(starSec);
+    }
+
+    /** 折叠列表：默认收起，点标题才展开 —— 避免十几条词把设置面板撑满 */
+    _foldList(words, btnLabel, onClick, unit) {
+      const wrap = el('div', 'sp-fold');
+      const head = el('div', 'sp-fold-head');
+      head.appendChild(el('span', 'sp-fold-arrow'));
+      head.appendChild(
+        el('span', 'ell', words.length ? `展开查看 ${words.length} ${unit || '项'}` : '暂无')
+      );
+      wrap.appendChild(head);
+      const body = el('div', 'sp-fold-body collapsed');
+      body.appendChild(this._wordList(words, btnLabel, onClick));
+      wrap.appendChild(body);
+      if (words.length) {
+        head.addEventListener('click', () => {
+          const closed = body.classList.contains('collapsed');
+          body.classList.toggle('collapsed', !closed);
+          wrap.classList.toggle('open', closed);
+        });
+      }
+      return wrap;
     }
 
     _wordList(words, btnLabel, onClick) {
@@ -500,6 +809,33 @@
       rowBtn.appendChild(this._btn('重命名', () => this.app.renameList(), 'ghost'));
       rowBtn.appendChild(this._btn('删除', () => this.app.removeList(), 'ghost danger'));
       sec.appendChild(rowBtn);
+      const noTear = s.checklistNoTear !== false;
+      sec.appendChild(
+        this._switchRow('不撕纸', noTear, (v) => this.app.setChecklistNoTear(v))
+      );
+      sec.appendChild(
+        this._hint(
+          noTear
+            ? '清单的每一页只是同一个清单的分页视图：下拉/滚轮只是往下浏览，松手对齐到整页，往上滚就能回到第一页。'
+            : '关掉后和单词模式一样：拉出超过「撕纸阈值」就撕掉一张（可在「手势」里调阈值），撕下来的能回溯。'
+        )
+      );
+      sec.appendChild(
+        this._switchRow('循环浏览', s.checklistLoop !== false, (v) => this.app.setChecklistLoop(v))
+      );
+      sec.appendChild(
+        this._hint(
+          noTear
+            ? '和单词模式一样：纸带无限，拉到底会接回第一页。关掉后拉到最后一张就停。'
+            : '撕纸模式下纸带不再循环（撕完又绕回来等于白撕），这条开关只在「不撕纸」时起作用。'
+        )
+      );
+      sec.appendChild(
+        this._switchRow('自动序号', !!s.checklistNumbering, (v) => this.app.setChecklistNumbering(v))
+      );
+      sec.appendChild(
+        this._hint('勾选后纸面按添加顺序标 1. 2. 3.：新条目接在最后，序号自动往后排；删掉中间一条，后面的序号会往前补。')
+      );
       body.appendChild(sec);
 
       const active = (cl.lists || []).find((l) => l.id === cl.activeListId) || (cl.lists || [])[0];
@@ -527,6 +863,14 @@
       });
       addRow.appendChild(input);
       itemSec.appendChild(addRow);
+
+      // 高级编辑：跳独立窗口，像 doc 一样排版（字号/字色/高亮/加粗），纸面按段落折行分页
+      const richRow = el('div', 'sp-row');
+      const richBtn = this._btn('高级编辑', () => this.app.editItemRich(''), 'ghost');
+      richBtn.style.flex = '0 0 auto';
+      richRow.appendChild(richBtn);
+      richRow.appendChild(el('span', 'sp-hint', '字号 / 字色 / 突出显示 / 加粗'));
+      itemSec.appendChild(richRow);
 
       const box = el('div', 'sp-list');
       if (!active.items.length) {
@@ -572,14 +916,24 @@
         if (it.style && it.style.bold) txt.style.fontWeight = '700';
         if (it.done) txt.style.opacity = '0.6';
         if (it.style && it.style.color) txt.style.color = it.style.color;
+        txt.style.cursor = 'text';
+        txt.title = '双击修改文字';
+        txt.addEventListener('dblclick', () => this.app.editItemText(it.id));
         item.appendChild(txt);
+        const richBtn = this._btn('Aa', () => this.app.editItemRich(it.id), 'sm');
+        richBtn.title = it.html ? '高级编辑（这条已排版）' : '高级编辑（字号/字色/高亮/加粗）';
+        item.appendChild(richBtn);
         item.appendChild(this._btn('↑', () => this.app.moveItem(it.id, -1), 'sm'));
         item.appendChild(this._btn('↓', () => this.app.moveItem(it.id, 1), 'sm'));
         item.appendChild(this._btn('✕', () => this.app.removeItem(it.id), 'sm danger'));
         box.appendChild(item);
       }
       itemSec.appendChild(box);
-      itemSec.appendChild(this._hint('排序即数组顺序；纸上可通过右键菜单改颜色/加粗/划线/勾选。'));
+      itemSec.appendChild(
+        this._hint(
+          '「Aa」打开「高级编辑」窗口（字号/字色/突出显示/加粗，写大段文字）；双击文字改成纯文本；排序即数组顺序；纸上右键可改颜色/加粗/划线/勾选。'
+        )
+      );
       body.appendChild(itemSec);
     }
 
@@ -620,8 +974,21 @@
       pathEl.style.userSelect = 'text';
       sec.appendChild(pathEl);
       sec.appendChild(this._btn('打开数据目录', () => this.app.openUserData(), 'ghost'));
-      sec.appendChild(this._hint('设置、进度、清单、回溯栈均保存在本机，不会上传。'));
+      sec.appendChild(this._hint('设置、进度、清单均保存在本机，不会上传；回溯栈只存在内存里，退出即清空。'));
       body.appendChild(sec);
+
+      const resetSec = this._sec('重置');
+      resetSec.appendChild(
+        this._hint('导入的文档与词库文件不会被这两个按钮删除，需要清理时在上面的模式分区里单独删。')
+      );
+      const row = el('div', 'sp-row');
+      row.appendChild(this._btn('恢复默认设置', () => this.app.resetData('settings'), 'ghost'));
+      row.appendChild(this._btn('清空全部数据', () => this.app.resetData('all'), 'ghost danger'));
+      resetSec.appendChild(row);
+      resetSec.appendChild(
+        this._hint('「恢复默认设置」只重置外观/撕纸/快捷键；「清空全部数据」会连学习进度、阅读进度、清单一起清掉。')
+      );
+      body.appendChild(resetSec);
 
       const sec2 = this._sec('关于');
       sec2.appendChild(this._hint(`小纸巾 · 学习卷纸桌宠 v${info.version || '1.0.0'}`));

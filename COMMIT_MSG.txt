@@ -1,0 +1,58 @@
+feat: multilingual lexicons, checklist paper flow and rich-text editor
+
+覆盖初版之后的全部迭代（v1.1 至 v2.3）。
+
+Covers every iteration after the initial implementation (v1.1 to v2.3).
+
+- Multilingual entries: metadata records word-form and definition
+  languages, so any imported pair can render.
+
+  多语言词条：meta 记录词形与释义语言，任一已导入的语言对都能渲染。
+
+- Language switching: two exclusive dropdowns plus a swap button, and
+  refreshing keeps the paper position.
+
+  切换语言：两个互斥下拉加一个对调按钮，刷新后保留纸张进度。
+
+- Import slots: detected languages become tickable, renameable slots,
+  and duplicates are rejected.
+
+  导入槽位：识别到的语言拆成可勾选、可改名的槽位，重复语言直接拒绝。
+
+- Checklist strip: pagination is now per line, so long items are no longer
+  clipped; it can loop, auto-number, and switch between scroll and tear.
+
+  清单纸带：改为按行分页，长条目不再裁字；可循环、可自动编号，「不撕纸」开关
+  决定滚动还是按阈值撕。
+
+- Rich-text editor: a 300x240 window that is just the paper (no panel, no
+  header or footer), remembers its size and sits beside the pet.
+
+  富文本编辑器：300×240 置顶小窗，窗口本身就是纸（无背景板、无头尾栏），记住
+  尺寸并贴着桌宠摆。
+
+- Editor cleanup: dropped clear-format, undo and redo, which looked
+  functional but were not; only the seven working controls remain.
+
+  编辑器清理：删掉名不副实的清除格式与撤销/重做，只留实测生效的七项控件。
+
+- Theme fixes: the paper roll turns dark, selects follow the theme via
+  color-scheme, and highlights are semi-transparent.
+
+  主题修复：卷筒随黑夜变黑，下拉靠 color-scheme 跟随主题，高亮统一半透明。
+
+- Persistence: new settings fields plus store:reset, flush() waits for the
+  real write, and tray depth is reported by the renderer.
+
+  持久化：新增设置字段与 store:reset，flush() 等真正写完，托盘深度
+  改由渲染层上报。
+
+- Importer: definitions are split into language slots, franc is ignored on
+  short samples, and false phonetics are gone.
+
+  导入器：释义按语言槽位拆分，短样本不再采信 franc，假音标不再产生。
+
+- Docs: README covers the language settings, the checklist switches and the
+  editor window.
+
+  文档：README 同步语言设置、清单开关与编辑窗口。
