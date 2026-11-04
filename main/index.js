@@ -2,8 +2,10 @@
 /**
  * 主进程入口：生命周期 / 单实例锁 / 服务装配 / IPC 注册
  */
-const { app, ipcMain, shell, BrowserWindow } = require('electron');
+const { app, ipcMain, shell, BrowserWindow, dialog } = require('electron');
 const path = require('path');
+const fs = require('fs');
+const fsp = fs.promises;
 
 const { PersistService, SCOPES } = require('./persist');
 const { WindowManager } = require('./window-manager');
@@ -12,10 +14,14 @@ const { ShortcutService, ACTIONS } = require('./shortcuts');
 const { DictService } = require('./dict-service');
 const { ImportService, initFranc } = require('./importer');
 const { EditorWindow } = require('./editor-window');
+const { AutoLaunchService } = require('./auto-launch');
 const { IpcRouter } = require('./ipc-router');
 const { dictDir, resourceDir, userDir, ensureDir } = require('./paths');
+const i18n = require('./i18n');
 
-const isSmoke = process.argv.includes('--smoke-test');
+// 冒烟自检只在开发态开：打包版带着 --smoke-test 启动时按正常方式运行，
+// 免得发布出去的包还留着「读一个本地脚本并执行」的入口（DESKPET_PROBE）。
+const isSmoke = !app.isPackaged && process.argv.includes('--smoke-test');
 
 // 冒烟自检使用独立的临时数据目录，避免污染真实 userData（--fresh 时先清空）
 if (isSmoke) {
@@ -40,6 +46,7 @@ let dictService;
 let importer;
 let router;
 let editor;
+let autoLaunch;
 
 /* ---------------- 单实例 ---------------- */
 const gotLock = app.requestSingleInstanceLock();
@@ -55,6 +62,18 @@ if (!gotLock) {
 }
 
 app.disableHardwareAcceleration();
+
+/**
+ * 系统语言原值（如 zh-CN / en-US）。
+ * 「跟随系统」要拿它去解析，不能拿 i18n.locale —— 那是已经解析过、会记忆上一次选择的结果。
+ */
+function systemLocale() {
+  try {
+    return app.getLocale() || '';
+  } catch {
+    return '';
+  }
+}
 
 function bootstrap() {
   ensureDir(userDir());
@@ -73,6 +92,8 @@ function bootstrap() {
     }
   });
   persist = new PersistService(userDir(), { langOfDict: (dictId) => dictService.langOf(dictId) }).init();
+  // 语言先定下来：后面的托盘、原生提示都要用它（渲染层切换时会再同步一次）
+  i18n.init((persist.get('settings') || {}).locale || 'auto');
   // 迁移期间读过的词库 meta 里没有「用户手选语言」（那时 persist 还没赋值），清掉重读
   dictService.invalidateAll();
 
@@ -89,8 +110,35 @@ function bootstrap() {
 
   // 清单条目的独立编辑窗口（保存后把 HTML 回传给主窗口，窗口尺寸记在 settings.editorWindow）
   editor = new EditorWindow({ router, persist, getParent: () => (wm ? wm.win : null) });
+  // 切界面语言时，已经开着的排版窗口也要跟着换（它的工具带是独立页面）
+  i18n.onChange(() => {
+    if (!editor || !editor.win || editor.win.isDestroyed()) return;
+    try {
+      editor.win.webContents.send('editor:locale', { locale: i18n.pref, systemLocale: systemLocale() });
+      editor.win.setTitle(i18n.t('editor.windowTitle'));
+    } catch {
+      /* 窗口正在关闭 */
+    }
+  });
 
-  tray = new TrayService({ persist, router, windowManager: wm, resourceDir: resourceDir() });
+  // 开机自启动：**系统启动项是唯一事实来源**（界面/托盘都现读，不拿缓存糊弄人）；
+  // settings.autoLaunch 只记「用户上次的选择」，用来在程序被搬到别的位置后对账。
+  autoLaunch = new AutoLaunchService();
+  const heal = autoLaunch.syncIntent(!!persist.get('settings').autoLaunch);
+  if (heal.action === 'healed') {
+    // 换了安装目录 / 绿色版挪了文件夹：这次手动打开才有机会修，说一声比默默修更合适
+    persist.warnings.push('程序位置变了，开机自启动已改到当前位置（本次登录系统时还没生效）');
+  } else if (heal.action === 'error') {
+    persist.warnings.push(`开机自启动对账失败：${heal.error}`);
+  }
+
+  tray = new TrayService({
+    persist,
+    router,
+    windowManager: wm,
+    autoLaunch,
+    resourceDir: resourceDir()
+  });
   tray.create();
 
   shortcuts = new ShortcutService({ persist, router });
@@ -98,10 +146,7 @@ function bootstrap() {
   if (failures.length) {
     console.warn('[shortcut] 以下全局快捷键注册失败：', failures);
     setTimeout(() => {
-      router.sendNotice(
-        `有 ${failures.length} 个全局快捷键被系统或其他软件占用，可到设置中心改键`,
-        'warn'
-      );
+      router.sendNotice(i18n.t('notice.shortcuts', { n: failures.length }), 'warn');
     }, 1500);
   }
 
@@ -146,6 +191,62 @@ app.on('before-quit', () => {
 
 /* ---------------- IPC 注册 ---------------- */
 
+// 导出文件的「身份证」：导入时靠它判断是不是本系统导出的清单备份
+const CHECKLIST_EXPORT_KIND = 'tissue-pet-checklists';
+
+/**
+ * 只收「本系统清单」该有的字段（白名单式清洗，文件里别的内容一概不进数据）。
+ * 接受两种形态：导出文件整体 { kind, version, lists } 或裸的 lists 数组。
+ */
+function sanitizeChecklistLists(raw) {
+  const src = Array.isArray(raw)
+    ? raw
+    : raw && typeof raw === 'object' && raw.kind === CHECKLIST_EXPORT_KIND && Array.isArray(raw.lists)
+      ? raw.lists
+      : [];
+  const out = [];
+  for (const l of src.slice(0, 200)) {
+    if (!l || typeof l !== 'object') continue;
+    const items = [];
+    for (const it of (Array.isArray(l.items) ? l.items : []).slice(0, 5000)) {
+      if (!it || typeof it !== 'object') continue;
+      const style = it.style && typeof it.style === 'object' ? it.style : {};
+      const item = {
+        id: typeof it.id === 'string' ? it.id.slice(0, 64) : '',
+        text: String(it.text || '').slice(0, 20000) || '（空）',
+        done: !!it.done,
+        style: {
+          bold: !!style.bold,
+          strike: !!style.strike,
+          color: typeof style.color === 'string' ? style.color.slice(0, 32) : undefined
+        },
+        starred: !!it.starred,
+        createdAt: Number.isFinite(it.createdAt) ? it.createdAt : Date.now()
+      };
+      if (typeof it.html === 'string' && it.html) item.html = it.html.slice(0, 500000);
+      if (Array.isArray(it.notes) && it.notes.length) {
+        const notes = it.notes
+          .filter((n) => n && typeof n === 'object' && String(n.text || '').trim())
+          .slice(0, 50)
+          .map((n) => ({
+            id: typeof n.id === 'string' ? n.id.slice(0, 64) : '',
+            text: String(n.text).slice(0, 20000),
+            mode: n.mode === 'click' || n.mode === 'hover' ? n.mode : 'always'
+          }));
+        if (notes.length) item.notes = notes;
+      }
+      items.push(item);
+    }
+    out.push({
+      id: typeof l.id === 'string' ? l.id.slice(0, 64) : '',
+      name: String(l.name || '').slice(0, 100) || '导入的清单',
+      createdAt: Number.isFinite(l.createdAt) ? l.createdAt : Date.now(),
+      items
+    });
+  }
+  return out;
+}
+
 function registerIpc() {
   /* 窗口 */
   router.on('win', 'close', () => app.quit());
@@ -176,6 +277,9 @@ function registerIpc() {
     persist.patch(scope, partial, { critical: !!critical });
     if (scope === 'settings') {
       const s = persist.get('settings');
+      // 界面语言变了：先换主进程文案，再重建托盘（原生菜单是一次性快照，不会自己变）
+      const pref = s.locale || 'auto';
+      if (i18n.pref !== pref) i18n.setPref(pref);
       if (tray) tray.refresh();
       if (wm && Number.isFinite(s.scale) && Math.abs(s.scale - wm.scale) > 0.001) {
         wm.applyScale(s.scale);
@@ -186,11 +290,19 @@ function registerIpc() {
   router.handle('store', 'reset', (p) => {
     const scope = p && p.scope;
     if (!SCOPES.includes(scope)) {
-      throw Object.assign(new Error('非法的数据分区'), { code: 'E_SCOPE_INVALID', expected: true });
+      throw Object.assign(new Error(i18n.t('error.scopeInvalid')), { code: 'E_SCOPE_INVALID', expected: true });
     }
     persist.reset(scope);
     if (scope === 'settings') {
+      // 「恢复默认设置」不该顺手关掉开机自启动：把意图改回系统现状，
+      // 否则下次启动对账会把用户明明开着的启动项删掉
+      persist.patch(
+        'settings',
+        { autoLaunch: !!(autoLaunch && autoLaunch.status().enabled) },
+        { critical: true }
+      );
       const s = persist.get('settings');
+      if (i18n.pref !== (s.locale || 'auto')) i18n.setPref(s.locale || 'auto');
       if (tray) tray.refresh();
       if (wm) {
         wm.applyScale(s.scale);
@@ -248,11 +360,70 @@ function registerIpc() {
 
   /* 清单条目的独立编辑窗口 */
   router.handle('editor', 'open', (p) => (editor ? editor.open(p || {}) : null));
-  router.handle('editor', 'payload', () => (editor ? editor.getPayload() : null));
+  router.handle('editor', 'payload', () => {
+    const p = editor ? editor.getPayload() : null;
+    if (!p) return null;
+    // 带上界面语言：排版窗口是独立页面，自己解析 auto 会跟主窗口不一致
+    return Object.assign({}, p, { locale: i18n.pref, systemLocale: systemLocale() });
+  });
   router.handle('editor', 'save', (p) => (editor ? editor.save(p || {}) : null));
   router.handle('editor', 'close', () => (editor ? editor.close() : null));
   // 主题同步（send 型）：切黑夜模式时编辑窗口里的纸也要变黑
   router.on('editor', 'theme', (p) => (editor ? editor.setTheme(p && p.dark) : null));
+
+  /* 清单导入导出（v2.8）：只针对本系统自己的清单数据，走 JSON 备份文件 */
+  router.handle('checklist', 'export', async () => {
+    const lists = (persist.get('checklists') || {}).lists || [];
+    if (!lists.length) {
+      throw Object.assign(new Error('还没有清单可以导出'), { expected: true });
+    }
+    const stamp = new Date().toISOString().slice(0, 16).replace(/[-:T]/g, '');
+    let dir;
+    try {
+      dir = app.getPath('documents');
+    } catch {
+      dir = app.getPath('userData');
+    }
+    const { canceled, filePath } = await dialog.showSaveDialog({
+      title: '导出清单',
+      defaultPath: path.join(dir, `卷纸清单-${stamp}.json`),
+      filters: [
+        { name: '清单备份 (JSON)', extensions: ['json'] },
+        { name: '所有文件', extensions: ['*'] }
+      ]
+    });
+    if (canceled || !filePath) return { canceled: true };
+    const payload = {
+      kind: CHECKLIST_EXPORT_KIND,
+      version: 1,
+      exportedAt: new Date().toISOString(),
+      lists
+    };
+    await fsp.writeFile(filePath, JSON.stringify(payload, null, 2), 'utf8');
+    return { canceled: false, filePath, count: lists.length };
+  });
+  router.handle('checklist', 'import', async () => {
+    const { canceled, filePaths } = await dialog.showOpenDialog({
+      title: '导入清单',
+      filters: [
+        { name: '清单备份 (JSON)', extensions: ['json'] },
+        { name: '所有文件', extensions: ['*'] }
+      ],
+      properties: ['openFile']
+    });
+    if (canceled || !filePaths || !filePaths.length) return { canceled: true };
+    let raw;
+    try {
+      raw = JSON.parse(await fsp.readFile(filePaths[0], 'utf8'));
+    } catch {
+      throw Object.assign(new Error('文件不是有效的 JSON，无法导入'), { expected: true });
+    }
+    const lists = sanitizeChecklistLists(raw);
+    if (!lists.length) {
+      throw Object.assign(new Error('文件里没有可导入的清单（只支持本系统导出的清单备份）'), { expected: true });
+    }
+    return { canceled: false, lists, count: lists.length };
+  });
 
   /* 快捷键 */
   router.handle('shortcut', 'set', (p) => shortcuts.set(p && p.action, p && p.accelerator, p && p.scope));
@@ -270,8 +441,23 @@ function registerIpc() {
     version: app.getVersion(),
     userData: app.getPath('userData'),
     dictDir: dictDir(),
-    packaged: app.isPackaged
+    packaged: app.isPackaged,
+    // 主进程解析好的界面语言：渲染层拿它兜住「跟随系统」时两边不一致的情况
+    locale: i18n.locale,
+    localePref: i18n.pref,
+    systemLocale: systemLocale()
   }));
+
+  /* 开机自启动：状态实时读系统启动项；settings.autoLaunch 只记用户的选择，供下次启动对账 */
+  router.handle('app', 'autoLaunchStatus', () => autoLaunch.status());
+  router.handle('app', 'setAutoLaunch', (p) => {
+    const st = autoLaunch.set(p && p.enabled);
+    // 记「实际写成功的结果」而不是请求值：写失败会抛错，这里不会被执行
+    persist.patch('settings', { autoLaunch: !!st.enabled }, { critical: true });
+    if (tray) tray.refresh(); // 托盘里同一项要跟着打勾/取消
+    return st;
+  });
+  router.handle('app', 'openStartupSettings', () => autoLaunch.openSystemSettings());
 
   /* 兼容旧通道（M1 周期内保留） */
   ipcMain.on('window-close', () => app.quit());
@@ -361,6 +547,7 @@ function initSmoke(win) {
         }
         // 托盘的回溯深度只存在主进程内存里，探针读不到，这里顺手带出来
         logs.push(`[tray] ${JSON.stringify(tray ? tray.depths : null)}`);
+        logs.push(`[autoLaunch] ${JSON.stringify(autoLaunch ? autoLaunch.status() : null)}`);
         logs.push(`[persistWarnings] ${JSON.stringify(persist ? persist.warnings : null)}`);
         if (process.env.DESKPET_SHOT) {
           const dir = process.env.DESKPET_SHOT;

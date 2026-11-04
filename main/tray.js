@@ -6,14 +6,27 @@
 const { Tray, Menu, nativeImage } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const i18n = require('./i18n');
 
-const MODE_LABEL = { learn: '学习', leisure: '休闲', checklist: '清单' };
+/** 兼容旧引用：菜单标签一律现取 i18n（语言切换后 refresh() 会重建菜单） */
+const MODE_LABEL = {
+  get learn() {
+    return i18n.t('mode.learn');
+  },
+  get leisure() {
+    return i18n.t('mode.leisure');
+  },
+  get checklist() {
+    return i18n.t('mode.checklist');
+  }
+};
 
 class TrayService {
-  constructor({ persist, router, windowManager, resourceDir }) {
+  constructor({ persist, router, windowManager, autoLaunch, resourceDir }) {
     this.persist = persist;
     this.router = router;
     this.wm = windowManager;
+    this.autoLaunch = autoLaunch || null;
     this.resourceDir = resourceDir;
     this.tray = null;
     // 回溯栈按用户要求只在内存里（重启即空），所以托盘不能用磁盘里的 torn.stack 判断。
@@ -39,12 +52,35 @@ class TrayService {
       image = image.resize({ width: 16, height: 16 });
     }
     this.tray = new Tray(image);
-    this.tray.setToolTip('小纸巾 · 学习卷纸桌宠');
+    this.tray.setToolTip(i18n.t('tray.tooltip'));
     this.tray.on('click', () => {
       this.router.sendAction({ source: 'tray', action: 'toggleVisible' });
     });
     this.refresh();
     return this.tray;
+  }
+
+  /** 托盘里的「开机自启动」：写系统启动项后立刻回读，成败都同步给界面 */
+  toggleAutoLaunch() {
+    if (!this.autoLaunch) return;
+    const cur = this.autoLaunch.status();
+    try {
+      const st = this.autoLaunch.set(!cur.enabled);
+      // 记下用户的选择：程序以后被搬到别的位置，启动时靠它把启动项改到新路径
+      this.persist.patch('settings', { autoLaunch: !!st.enabled }, { critical: true });
+      this.refresh();
+      if (st.blocked) {
+        this.router.sendNotice(i18n.t('tray.notice.blocked'), 'warn');
+      } else {
+        this.router.sendNotice(
+          st.enabled ? i18n.t('tray.notice.on') : i18n.t('tray.notice.off'),
+          'info'
+        );
+      }
+    } catch (err) {
+      this.refresh();
+      this.router.sendNotice((err && err.message) || i18n.t('tray.notice.failed'), 'warn');
+    }
   }
 
   refresh() {
@@ -53,15 +89,16 @@ class TrayService {
     const visible = this.wm ? this.wm.visible : true;
     const mode = settings.currentMode || 'learn';
     const auto = !!(settings.autoTear && settings.autoTear.enabled);
+    this.tray.setToolTip(i18n.t('tray.tooltip'));
 
     const menu = Menu.buildFromTemplate([
       {
-        label: visible ? '隐藏桌宠' : '显示桌宠',
+        label: visible ? i18n.t('tray.hide') : i18n.t('tray.show'),
         click: () => this.router.sendAction({ source: 'tray', action: 'toggleVisible' })
       },
       { type: 'separator' },
       {
-        label: '模式',
+        label: i18n.t('tray.mode'),
         submenu: Object.keys(MODE_LABEL).map((m) => ({
           label: MODE_LABEL[m],
           type: 'radio',
@@ -71,19 +108,26 @@ class TrayService {
         }))
       },
       {
-        label: '回溯上一张',
+        label: i18n.t('tray.backtrack'),
         enabled: (this.depths[mode] || 0) > 0,
         click: () => this.router.sendAction({ source: 'tray', action: 'backtrack' })
       },
       {
-        label: '自动滚落',
+        label: i18n.t('tray.autoTear'),
         type: 'checkbox',
         checked: auto,
         click: () => this.router.sendAction({ source: 'tray', action: 'toggleAutoTear' })
       },
+      {
+        label: i18n.t('tray.autoLaunch'),
+        type: 'checkbox',
+        checked: this.autoLaunch ? !!this.autoLaunch.status().enabled : false,
+        enabled: this.autoLaunch ? this.autoLaunch.supported : false,
+        click: () => this.toggleAutoLaunch()
+      },
       { type: 'separator' },
       {
-        label: '退出',
+        label: i18n.t('tray.quit'),
         click: () => {
           this.router.sendAction({ source: 'tray', action: 'quit' });
         }

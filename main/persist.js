@@ -5,6 +5,7 @@
  */
 const fs = require('fs');
 const path = require('path');
+const i18n = require('./i18n');
 
 const STATE_VERSION = 1;
 
@@ -33,6 +34,8 @@ function defaultState() {
   return {
     settings: {
       currentMode: 'learn',
+      // 界面语言：'auto'（跟随系统）| 'zh-CN' | 'zh-TW' | 'en' | 'ja' | 'fr'
+      locale: 'auto',
       scale: 1.0,
       basePaperWidthPx: 170,
       basePaperHeightPx: 200,
@@ -50,13 +53,32 @@ function defaultState() {
       // 清单不撕纸：默认开（清单的纸只是同一个清单的分页视图，撕掉就看不见开头几条）；
       // 关掉后按「撕纸阈值」一张张撕，和单词模式一致
       checklistNoTear: true,
+      // 清单定时清除：每天到点把**在纸面上**做的标记（勾选 / 右键设的加粗、颜色、划线）清掉。
+      // lastDate 记「最后一次自动清除的日期」，用来保证同一天只清一次；
+      // enabledAt 记「打开这个开关的时刻」，用来避免「刚开启就被立刻清空」。
+      checklistAutoClear: {
+        enabled: false,
+        time: '06:00',
+        // done = 只取消勾选；page = 只清纸面上设的格式（高级编辑里的排版、随记都不动）
+        scope: 'page',
+        lastDate: '',
+        enabledAt: 0
+      },
+      // 设置面板里的数量括号：关掉后「今日目标（0）」只显示「今日目标」
+      showCounts: true,
+      // 功能说明窗口：第一次使用自动弹一次，弹完记 true（设置 → 通用 里可随时再看）
+      guideShown: false,
       autoTear: { enabled: false, pxPerSec: 20 },
       shortcuts: defaultShortcuts(),
       windowPos: { displayId: -1, x: null, y: null },
       // 设置中心相对默认位置（右上角）的偏移，拖动后记住
       panelPos: { x: 0, y: 0 },
       // 高级编辑窗口上次被拉到多大（默认就是最小号 300×240）
-      editorWindow: { width: 300, height: 240 }
+      editorWindow: { width: 300, height: 240 },
+      // 开机自启动的「用户意图」：勾没勾这一项。
+      // 真实状态永远以系统启动项为准（见 main/auto-launch.js），这份只是为了
+      // 程序被搬到别的位置之后，下次启动能把启动项改写到新路径。
+      autoLaunch: false
     },
     learn: {
       currentDictId: 'cet4',
@@ -261,8 +283,8 @@ class PersistService {
   /** 只允许该 scope 已定义的字段，未知字段丢弃并告警 */
   patch(scope, partial, opts = {}) {
     const def = defaultState()[scope];
-    if (!def) throw Object.assign(new Error('非法 scope'), { code: 'E_SCOPE_INVALID' });
-    if (!isPlainObject(partial)) throw Object.assign(new Error('非法载荷'), { code: 'E_SCOPE_INVALID' });
+    if (!def) throw Object.assign(new Error(i18n.t('error.scopeInvalid')), { code: 'E_SCOPE_INVALID' });
+    if (!isPlainObject(partial)) throw Object.assign(new Error(i18n.t('error.payloadInvalid')), { code: 'E_SCOPE_INVALID' });
     const target = this.state[scope];
     for (const key of Object.keys(partial)) {
       if (!(key in def)) {
@@ -289,7 +311,7 @@ class PersistService {
   /** 把某个分区整体恢复成默认值并立即落盘（清空全部数据 = 对 5 个分区各调一次） */
   reset(scope) {
     const def = defaultState()[scope];
-    if (!def) throw Object.assign(new Error('非法的数据分区'), { code: 'E_SCOPE_INVALID' });
+    if (!def) throw Object.assign(new Error(i18n.t('error.scopeInvalid')), { code: 'E_SCOPE_INVALID' });
     this._cancelTimer(scope);
     this.state[scope] = JSON.parse(JSON.stringify(def));
     this.dirty.add(scope);

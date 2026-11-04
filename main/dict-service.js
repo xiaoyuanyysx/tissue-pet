@@ -1,11 +1,12 @@
 'use strict';
 /**
  * DictService —— B1 内置词库 / B3 导入词库
- * 内置：词库/*.txt（Tab 分隔：单词<Tab>音标<Tab>释义），惰性解析 + 进程内缓存
+ * 内置：vocab/*.txt（Tab 分隔：单词<Tab>音标<Tab>释义），惰性解析 + 进程内缓存
  * 导入：userData/dicts/<id>.json，与内置走同一 getEntries 接口（B4 行为一致的实现基础）
  */
 const fs = require('fs');
 const path = require('path');
+const i18n = require('./i18n');
 
 const BUILTIN = [
   { id: 'zhongkao', name: '中考', file: '中考.txt', wordLang: '英语', defLang: '中文' },
@@ -333,7 +334,7 @@ class DictService {
   getEntries({ dictId, offset = 0, count = MAX_COUNT } = {}) {
     const pack = this._pack(dictId);
     if (!pack) {
-      const e = new Error('该词库不存在，可能已被删除');
+      const e = new Error(i18n.t('error.dictMissing'));
       e.code = 'E_DICT_NOT_FOUND';
       e.expected = true;
       throw e;
@@ -371,7 +372,7 @@ class DictService {
 
   remove(dictId) {
     if (this._builtinMeta(dictId)) {
-      const e = new Error('内置词库不可删除');
+      const e = new Error(i18n.t('error.dictBuiltin'));
       e.code = 'E_DICT_BUILTIN';
       e.expected = true;
       throw e;
@@ -381,7 +382,7 @@ class DictService {
       if (fs.existsSync(file)) fs.unlinkSync(file);
       this.cache.delete(dictId);
     } catch (err) {
-      const e = new Error('删除词库失败，文件可能被占用');
+      const e = new Error(i18n.t('error.dictDeleteBusy'));
       e.code = 'E_FILE_UNREADABLE';
       e.expected = true;
       throw e;

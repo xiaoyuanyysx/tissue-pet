@@ -6,6 +6,7 @@
  */
 const fs = require('fs');
 const path = require('path');
+const i18n = require('../i18n');
 const { dialog } = require('electron');
 
 const { decodeBuffer, textToBlocks, sanitize } = require('./text');
@@ -21,7 +22,8 @@ const DOC_FILTERS = [
 ];
 
 function err(code, message, detail) {
-  const e = new Error(message);
+  // message 传的是词条 key（error.*），这里统一翻译，调用处不再拼中文
+  const e = new Error(i18n.t(message));
   e.code = code;
   e.detail = detail;
   e.expected = true;
@@ -395,7 +397,7 @@ function applyLangPlan(entries, plan) {
   // 上下两行是同一个名字时没有切换意义，直接拦下来（渲染层也会再拦一次）
   const uniq = new Set(langs.map((x) => x.toLowerCase()));
   if (uniq.size < langs.length) {
-    throw err('E_LANG_DUP', '词条语言和释义语言不能是同一种，请改名后再导入');
+    throw err('E_LANG_DUP', 'error.langDup');
   }
   return { entries: out, wordLang, defLang: rename.get(defSlots[0].key), langs };
 }
@@ -487,12 +489,12 @@ class ImportService {
       const stat = fs.statSync(filePath);
       if (!stat.isFile()) throw new Error('not file');
       if (stat.size > 200 * 1024 * 1024) {
-        throw err('E_FILE_UNREADABLE', '文件过大（超过 200MB），无法导入');
+        throw err('E_FILE_UNREADABLE', 'error.fileTooLarge');
       }
       return fs.readFileSync(filePath);
     } catch (e) {
       if (e && e.expected) throw e;
-      throw err('E_FILE_UNREADABLE', '无法读取文件，可能已被移动或占用');
+      throw err('E_FILE_UNREADABLE', 'error.fileUnreadable');
     }
   }
 
@@ -511,15 +513,15 @@ class ImportService {
       const { text, encoding } = decodeBuffer(buf);
       const markdown = ext !== 'txt' && ext !== 'text';
       const blocks = textToBlocks(text, { markdown });
-      if (!blocks.length) throw err('E_EMPTY_DOC', '文档是空的，没有可显示的内容');
+      if (!blocks.length) throw err('E_EMPTY_DOC', 'error.emptyDoc');
       return { blocks, rawText: text, encoding };
     }
-    if (ext === 'doc') throw err('E_PARSE_DOCX', '不支持旧版 .doc 格式，请另存为 .docx 后再导入');
-    throw err('E_FILE_UNREADABLE', '不支持的文件类型，请使用 txt / md / docx / pdf');
+    if (ext === 'doc') throw err('E_PARSE_DOCX', 'error.legacyDoc');
+    throw err('E_FILE_UNREADABLE', 'error.unsupportedType');
   }
 
   async parse({ filePath, mode }) {
-    if (!filePath) throw err('E_FILE_UNREADABLE', '没有选择文件');
+    if (!filePath) throw err('E_FILE_UNREADABLE', 'error.noFile');
     const buf = this._read(filePath);
     const baseName = path.basename(filePath).replace(/\.[^.]+$/, '');
     const { blocks, rawText } = await this._parseFile(filePath, buf);
@@ -530,7 +532,7 @@ class ImportService {
       // 词条识别率过低说明这不是一份词库（避免把正文误当词表）
       const ratio = totalLines ? parsed.entries.length / totalLines : 0;
       if (!parsed.entries.length || ratio < 0.5) {
-        throw err('E_NOT_WORDLIST', '未在该文件中找到词条（需要每行一条：词 + 释义）');
+        throw err('E_NOT_WORDLIST', 'error.notWordlist');
       }
       const entries = dropLangOutliers(parsed.entries);
       const token = `p_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
@@ -587,7 +589,7 @@ class ImportService {
       entries = parsed.entries;
     }
     if (!entries || !entries.length) {
-      throw err('E_NOT_WORDLIST', '词条数据已失效，请重新导入文件');
+      throw err('E_NOT_WORDLIST', 'error.dataStale');
     }
     let plan = null;
     if (Array.isArray(langPlan) && langPlan.length) {
@@ -626,7 +628,7 @@ class ImportService {
       this.cache.set(docId, pack);
       return pack;
     } catch {
-      throw err('E_DOC_NOT_FOUND', '该资料不存在，可能已被清理');
+      throw err('E_DOC_NOT_FOUND', 'error.docMissing');
     }
   }
 
@@ -666,7 +668,7 @@ class ImportService {
       if (fs.existsSync(file)) fs.unlinkSync(file);
       this.cache.delete(docId);
     } catch {
-      throw err('E_DOC_NOT_FOUND', '删除失败，文件可能被占用');
+      throw err('E_DOC_NOT_FOUND', 'error.deleteBusy');
     }
     return null;
   }

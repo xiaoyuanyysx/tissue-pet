@@ -5,6 +5,7 @@
  * 聚焦轨：before-input-event（窗口聚焦时拦截，支持单独 Shift 等任意键）
  */
 const { globalShortcut } = require('electron');
+const i18n = require('./i18n');
 
 const ACTIONS = [
   'backtrack',
@@ -70,19 +71,19 @@ function toElectronAccelerator(acc) {
 function validateGlobal(acc) {
   const p = parseAccelerator(acc);
   if (!p || p.modifierOnly) {
-    throw mkErr('E_SHORTCUT_INVALID', '全局快捷键必须包含普通按键（如字母/数字）');
+    throw mkErr('E_SHORTCUT_INVALID', 'error.shortcutNeedKey');
   }
   if (!p.mods.length) {
-    throw mkErr('E_SHORTCUT_INVALID', '全局快捷键必须包含修饰键（Ctrl/Alt/Shift）');
+    throw mkErr('E_SHORTCUT_INVALID', 'error.shortcutNeedMod');
   }
   if (p.key.length > 12) {
-    throw mkErr('E_SHORTCUT_INVALID', '无法识别的按键');
+    throw mkErr('E_SHORTCUT_INVALID', 'error.shortcutUnknownKey');
   }
   return toElectronAccelerator(acc);
 }
 
-function mkErr(code, message, detail) {
-  const e = new Error(message);
+function mkErr(code, message, detail, params) {
+  const e = new Error(i18n.t(message, params));
   e.code = code;
   e.detail = detail;
   e.expected = true;
@@ -165,12 +166,12 @@ class ShortcutService {
   }
 
   set(action, accelerator, scope) {
-    if (!ACTIONS.includes(action)) throw mkErr('E_SCOPE_INVALID', '未知的快捷键动作');
-    if (scope !== 'focused' && scope !== 'global') throw mkErr('E_SCOPE_INVALID', '未知的快捷键轨');
+    if (!ACTIONS.includes(action)) throw mkErr('E_SCOPE_INVALID', 'error.shortcutUnknownAction');
+    if (scope !== 'focused' && scope !== 'global') throw mkErr('E_SCOPE_INVALID', 'error.shortcutUnknownScope');
     const next = String(accelerator || '').trim();
     if (!next) {
       // 仅聚焦轨允许清空（表示不绑定）
-      if (scope !== 'focused') throw mkErr('E_SHORTCUT_INVALID', '全局快捷键不能为空');
+      if (scope !== 'focused') throw mkErr('E_SHORTCUT_INVALID', 'error.shortcutEmpty');
       this.map[action].focused = '';
       this.persist.patch('settings', { shortcuts: this.getAll() }, { critical: true });
       return null;
@@ -181,9 +182,9 @@ class ShortcutService {
       if (other === action) continue;
       const cur = this.map[other][scope];
       if (cur && canonical(cur) === canonicalNext) {
-        throw mkErr('E_SHORTCUT_CONFLICT', `该组合键已被「${labelOf(other)}」占用`, {
+        throw mkErr('E_SHORTCUT_CONFLICT', 'error.shortcutTaken', {
           conflictWith: other
-        });
+        }, { name: labelOf(other) });
       }
     }
 
@@ -193,7 +194,7 @@ class ShortcutService {
       this._unregisterGlobal(action);
       if (!this._registerGlobal(action, next)) {
         if (prev) this._registerGlobal(action, prev);
-        throw mkErr('E_SHORTCUT_INVALID', '该快捷键无法注册（可能已被系统或其他软件占用）');
+        throw mkErr('E_SHORTCUT_INVALID', 'error.shortcutUnregisterable');
       }
     }
 

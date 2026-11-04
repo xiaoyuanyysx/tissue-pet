@@ -115,6 +115,12 @@ body {
   background: var(--ed-active);
 }
 
+/* 曲线按钮的字样：本身就是波浪下划线，所见即所得 */
+.ed-wavy {
+  text-decoration: underline wavy;
+  text-underline-offset: 2px;
+}
+
 /* 字号下拉：不能用 transparent —— 原生 select 下面有 UA 自己画的底（白色），
    只有显式给一个不透明的底色才能跟工具带融为一体。配色靠 color-scheme 切换。 */
 .ed-size {

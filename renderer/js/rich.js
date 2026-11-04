@@ -60,6 +60,7 @@
     !!a.bold === !!b.bold &&
     !!a.italic === !!b.italic &&
     !!a.underline === !!b.underline &&
+    !!a.wavy === !!b.wavy &&
     !!a.strike === !!b.strike &&
     (a.color || '') === (b.color || '') &&
     (a.bg || '') === (b.bg || '');
@@ -83,7 +84,7 @@
     }
     if (!root) return [{ text: src }];
 
-    const base = { size: 0, bold: false, italic: false, underline: false, strike: false, color: '', bg: '' };
+    const base = { size: 0, bold: false, italic: false, underline: false, wavy: false, strike: false, color: '', bg: '' };
     walk(root, base);
     return tidy(runs);
 
@@ -133,6 +134,8 @@
         if (String(style.fontStyle || '').includes('italic')) next.italic = true;
         const deco = `${style.textDecoration || ''} ${style.textDecorationLine || ''}`;
         if (deco.includes('underline')) next.underline = true;
+        // 曲线（波浪下划线）：编辑器用 text-decoration:underline wavy 落盘
+        if (deco.includes('wavy')) next.wavy = true;
         if (deco.includes('line-through')) next.strike = true;
         if (style.color) {
           const c = parseColor(style.color);
@@ -171,6 +174,7 @@
         bold: !!r.bold,
         italic: !!r.italic,
         underline: !!r.underline,
+        wavy: !!r.wavy,
         strike: !!r.strike,
         color: r.color || '',
         bg: r.bg || ''
@@ -192,7 +196,8 @@
     const text = String(r.text || '');
     if (!text) return '';
     let html = NS.escape(text).replace(/\n/g, '<br>');
-    if (r.underline) html = `<u>${html}</u>`;
+    // 波浪线自带下划线外观，两者都在时只画波浪（不叠两条线）
+    if (r.underline && !r.wavy) html = `<u>${html}</u>`;
     if (r.strike) html = `<s>${html}</s>`;
     if (r.italic) html = `<i>${html}</i>`;
     if (r.bold) html = `<b>${html}</b>`;
@@ -200,6 +205,7 @@
     if (r.size) st.push(`font-size:${r.size}px`);
     if (r.color) st.push(`color:${r.color}`);
     if (r.bg) st.push(`background-color:${r.bg}`);
+    if (r.wavy) st.push('text-decoration:underline wavy');
     if (st.length) html = `<span style="${st.join(';')}">${html}</span>`;
     return html;
   }
@@ -257,6 +263,7 @@
         bold: !!r.bold,
         italic: !!r.italic,
         underline: !!r.underline,
+        wavy: !!r.wavy,
         strike: !!r.strike,
         color: r.color || '',
         bg: r.bg || ''

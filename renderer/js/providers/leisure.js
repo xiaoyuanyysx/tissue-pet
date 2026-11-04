@@ -123,7 +123,9 @@
     render(el, paper) {
       el.innerHTML = '';
       if (!paper) {
-        el.innerHTML = '<div class="empty-page">没有可显示的内容<br />可在设置中导入资料</div>';
+        el.innerHTML = `<div class="empty-page">${NS.t('paper.leisureEmpty')}<br />${NS.t(
+          'paper.leisureEmptyHint'
+        )}</div>`;
         return;
       }
       const box = document.createElement('div');

@@ -4,7 +4,14 @@
   const NS = global.XZ || (global.XZ = {});
 
   NS.MODES = ['learn', 'leisure', 'checklist'];
-  NS.MODE_LABEL = { learn: '学习', leisure: '休闲', checklist: '清单' };
+  /* 模式显示名走 i18n：MODE_LABEL 保留成 getter，老代码读它也不会写死中文 */
+  NS.MODE_LABEL = {};
+  NS.modeLabel = function (mode) {
+    return NS.I18N ? NS.I18N.t(`mode.${mode}`) : mode;
+  };
+  Object.defineProperty(NS.MODE_LABEL, 'learn', { get: () => NS.modeLabel('learn') });
+  Object.defineProperty(NS.MODE_LABEL, 'leisure', { get: () => NS.modeLabel('leisure') });
+  Object.defineProperty(NS.MODE_LABEL, 'checklist', { get: () => NS.modeLabel('checklist') });
   NS.VIEWPORT_TOP = 210;
   NS.BOTTOM_PADDING = 20;
   // 卷筒轴线（SVG 里 165..335 的中线），纸带始终以它为中心
@@ -56,7 +63,7 @@
   };
 
   NS.errorText = function (err) {
-    if (!err) return '操作失败';
+    if (!err) return NS.t ? NS.t('common.failed') : '操作失败';
     return err.message || String(err);
   };
 

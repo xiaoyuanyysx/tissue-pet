@@ -4,6 +4,7 @@
  * pdfjs-dist 取文本项 + 坐标，按 y 聚行、按 x 排序，重排为段落流（非整页截图）
  */
 const path = require('path');
+const i18n = require('../i18n');
 
 let pdfjs = null;
 function loadPdfjs() {
@@ -17,7 +18,7 @@ function loadPdfjs() {
 }
 
 function pdfErr(msg) {
-  const e = new Error(msg);
+  const e = new Error(i18n.t(msg));
   e.code = 'E_PARSE_PDF';
   e.expected = true;
   return e;
@@ -90,9 +91,9 @@ async function parsePdf(buf, opts = {}) {
   } catch (err) {
     const name = err && err.name;
     if (name === 'PasswordException' || /password/i.test(String(err && err.message))) {
-      throw pdfErr('该 PDF 已加密，无法读取文本');
+      throw pdfErr('error.pdfEncrypted');
     }
-    throw pdfErr('该 PDF 已损坏或格式不受支持，无法读取文本');
+    throw pdfErr('error.pdfBroken');
   }
 
   const blocks = [];

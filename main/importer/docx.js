@@ -8,13 +8,14 @@ const JSZip = require('jszip');
 const { parseXml } = require('./omml');
 const { evaluate } = require('./omml');
 const { mediaBlock, extOf, sanitize } = require('./text');
+const i18n = require('../i18n');
 
 const IMG = ['png', 'jpg', 'jpeg', 'gif', 'bmp', 'webp', 'svg', 'ico', 'tif', 'tiff', 'emf', 'wmf'];
 const AUDIO = ['wav', 'mp3', 'm4a', 'ogg', 'flac', 'aac', 'wma'];
 const VIDEO = ['mp4', 'avi', 'mov', 'mkv', 'webm', 'wmv'];
 
 function docxErr(msg, code = 'E_PARSE_DOCX') {
-  const e = new Error(msg);
+  const e = new Error(i18n.t(msg));
   e.code = code;
   e.expected = true;
   return e;
@@ -238,16 +239,16 @@ async function parseDocx(buf) {
   try {
     zip = await JSZip.loadAsync(buf);
   } catch {
-    throw docxErr('该文件不是有效的 Word 文档');
+    throw docxErr('error.docxInvalid');
   }
   const docFile = zip.file('word/document.xml');
-  if (!docFile) throw docxErr('该文件不是有效的 Word 文档（缺少正文）');
+  if (!docFile) throw docxErr('error.docxNoBody');
 
   let xml = '';
   try {
     xml = await docFile.async('string');
   } catch {
-    throw docxErr('Word 文档正文无法读取，文件可能已损坏');
+    throw docxErr('error.docxBroken');
   }
   const rels = await readRels(zip);
 
@@ -297,7 +298,7 @@ async function parseDocx(buf) {
   if (!blocks.length) {
     const fallback = await mammothFallback(buf);
     if (fallback.length) return fallback;
-    throw docxErr('文档是空的，没有可显示的内容', 'E_EMPTY_DOC');
+    throw docxErr('error.emptyDoc', 'E_EMPTY_DOC');
   }
   return blocks;
 }

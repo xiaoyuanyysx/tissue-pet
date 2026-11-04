@@ -164,7 +164,7 @@
       const now = Date.now();
       if (now - this._lastEmptyNotice < 1500) return;
       this._lastEmptyNotice = now;
-      if (this.hooks.onNotice) this.hooks.onNotice('已经到末尾了');
+      if (this.hooks.onNotice) this.hooks.onNotice(NS.t('engine.atEnd'));
     }
 
     /**
@@ -357,7 +357,7 @@
           });
           return true;
         }
-        if (this.hooks.onNotice) this.hooks.onNotice('没有可回溯的纸了');
+        if (this.hooks.onNotice) this.hooks.onNotice(NS.t('engine.noBacktrack'));
         return false;
       }
 

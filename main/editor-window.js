@@ -12,6 +12,7 @@
  */
 const { BrowserWindow, screen } = require('electron');
 const path = require('path');
+const i18n = require('./i18n');
 
 const MIN_SIZE = { width: 300, height: 240 };
 // 默认就是最小尺寸：没拉扯过时打开不占地方，窗口小、工具带会自己折成两行（不裁字）
@@ -162,7 +163,7 @@ class EditorWindow {
       y,
       minWidth: MIN_SIZE.width,
       minHeight: MIN_SIZE.height,
-      title: '高级编辑',
+      title: i18n.t('editor.windowTitle'),
       backgroundColor: this.payload.darkMode ? PAPER_BG.dark : PAPER_BG.light,
       autoHideMenuBar: true,
       show: false,

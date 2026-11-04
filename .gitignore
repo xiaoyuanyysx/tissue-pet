@@ -3,7 +3,11 @@ node_modules/
 
 # ===== 构建产物 =====
 dist/
-build/
+dist-new/
+dist.bak-*/
+build/*
+!build/icon.ico
+!build/icon.png
 out/
 release/
 *.blockmap

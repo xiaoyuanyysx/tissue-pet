@@ -1,9 +1,9 @@
 <!DOCTYPE html>
-<html lang="zh-CN" data-theme="light">
+<html lang="zh-CN" data-theme="light" data-title-key="editor.windowTitle">
 <head>
 <meta charset="UTF-8" />
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; font-src 'self' data:;" />
-<title>高级编辑</title>
+<title>排版</title>
 <link rel="stylesheet" href="./css/editor.css" />
 </head>
 <body>
@@ -12,15 +12,16 @@
      没有窗口底色、没有纸张卡片、没有头/底栏 —— 窗口本身就是那张纸。 -->
 <div class="ed">
   <div class="ed-bar">
-    <button type="button" class="ed-tool" data-cmd="bold" title="加粗 (Ctrl+B)"><b>B</b></button>
-    <button type="button" class="ed-tool" data-cmd="italic" title="斜体 (Ctrl+I)"><i>I</i></button>
-    <button type="button" class="ed-tool" data-cmd="underline" title="下划线 (Ctrl+U)"><u>U</u></button>
-    <button type="button" class="ed-tool" data-cmd="strikeThrough" title="删除线"><s>S</s></button>
+    <button type="button" class="ed-tool" data-cmd="bold" data-i18n-title="editor.bold" title="加粗 (Ctrl+B)"><b>B</b></button>
+    <button type="button" class="ed-tool" data-cmd="italic" data-i18n-title="editor.italic" title="斜体 (Ctrl+I)"><i>I</i></button>
+    <button type="button" class="ed-tool" data-cmd="underline" data-i18n-title="editor.underline" title="下划线 (Ctrl+U)"><u>U</u></button>
+    <button type="button" class="ed-tool" data-cmd="strikeThrough" data-i18n-title="editor.strike" title="删除线"><s>S</s></button>
+    <button type="button" class="ed-tool" id="btnWavy" data-i18n-title="editor.wavy" title="曲线（波浪下划线；再点一次取消）"><span class="ed-wavy">W</span></button>
 
     <span class="ed-sep"></span>
 
-    <select class="ed-size" id="edSize" title="字号（选「跟随正文」= 去掉字号）">
-      <option value="">跟随正文</option>
+    <select class="ed-size" id="edSize" data-i18n-title="editor.size" title="字号（选「跟随正文」= 去掉字号）">
+      <option value="" data-i18n="editor.sizeInherit">跟随正文</option>
       <option value="10">10px</option>
       <option value="12">12px</option>
       <option value="14">14px</option>
@@ -35,16 +36,16 @@
     <!-- 颜色：仿 Office，平时只占一个按钮，点开才出现色板 -->
     <div class="ed-pop-wrap">
       <button type="button" class="ed-tool ed-color-btn" id="btnFg"
-              title="字体颜色" aria-haspopup="true" aria-expanded="false">
+              data-i18n-title="editor.fg" title="字体颜色" aria-haspopup="true" aria-expanded="false">
         <span class="ed-color-glyph">A<i class="ed-color-bar" id="fgBar"></i></span>
         <i class="ed-caret" aria-hidden="true"></i>
       </button>
       <div class="ed-pop" id="popFg" hidden>
-        <div class="ed-pop-head">字体颜色</div>
+        <div class="ed-pop-head" data-i18n="editor.fg">字体颜色</div>
         <div class="ed-grid" id="gridFg"></div>
         <div class="ed-pop-foot">
-          <button type="button" class="ed-pop-auto" id="fgAuto" title="去掉字体颜色，跟随纸面字色">自动</button>
-          <label class="ed-hex" title="输入十六进制色值，如 d92b2b">
+          <button type="button" class="ed-pop-auto" id="fgAuto" data-i18n-title="editor.fgAuto" title="去掉字体颜色，跟随纸面字色"><span data-i18n="editor.auto">自动</span></button>
+          <label class="ed-hex" data-i18n-hex="d92b2b" title="输入十六进制色值，如 d92b2b">
             <span>#</span><input id="fgHex" type="text" maxlength="7" placeholder="RRGGBB" spellcheck="false" />
           </label>
         </div>
@@ -53,16 +54,16 @@
 
     <div class="ed-pop-wrap">
       <button type="button" class="ed-tool ed-color-btn" id="btnHl"
-              title="突出显示（文字底纹）" aria-haspopup="true" aria-expanded="false">
+              data-i18n-title="editor.hlTitle" title="突出显示（文字底纹）" aria-haspopup="true" aria-expanded="false">
         <span class="ed-color-glyph ed-hl-glyph">ab<i class="ed-color-bar" id="hlBar"></i></span>
         <i class="ed-caret" aria-hidden="true"></i>
       </button>
       <div class="ed-pop" id="popHl" hidden>
-        <div class="ed-pop-head">突出显示</div>
+        <div class="ed-pop-head" data-i18n="editor.hl">突出显示</div>
         <div class="ed-grid" id="gridHl"></div>
         <div class="ed-pop-foot">
-          <button type="button" class="ed-pop-auto" id="hlNone" title="去掉底纹">无颜色</button>
-          <label class="ed-hex" title="输入十六进制色值，如 ffe066">
+          <button type="button" class="ed-pop-auto" id="hlNone" data-i18n-title="editor.hlNone" title="去掉底纹"><span data-i18n="editor.none">无颜色</span></button>
+          <label class="ed-hex" data-i18n-hex="ffe066" title="输入十六进制色值，如 ffe066">
             <span>#</span><input id="hlHex" type="text" maxlength="7" placeholder="RRGGBB" spellcheck="false" />
           </label>
         </div>
@@ -71,8 +72,8 @@
 
     <!-- 按钮组：窄窗折行时靠右落位（margin-left:auto 在换行后仍然生效） -->
     <div class="ed-actions">
-      <button type="button" class="ed-btn" id="btnCancel">取消</button>
-      <button type="button" class="ed-btn primary" id="btnSave" title="保存 (Ctrl+S)">保存</button>
+      <button type="button" class="ed-btn" id="btnCancel" data-i18n="editor.cancel">取消</button>
+      <button type="button" class="ed-btn primary" id="btnSave" data-i18n-title="editor.saveTitle" title="保存 (Ctrl+S)"><span data-i18n="editor.save">保存</span></button>
     </div>
   </div>
 
@@ -82,6 +83,13 @@
   <div class="ed-toast" id="edToast"></div>
 </div>
 
+<!-- 文案：五份词典 + i18n，必须排在 editor.js 前面（同一个 window.XZ 命名空间） -->
+<script src="./js/locales/zh-CN.js"></script>
+<script src="./js/locales/zh-TW.js"></script>
+<script src="./js/locales/en.js"></script>
+<script src="./js/locales/ja.js"></script>
+<script src="./js/locales/fr.js"></script>
+<script src="./js/i18n.js"></script>
 <script src="./js/editor.js"></script>
 </body>
 </html>

@@ -1,203 +1,334 @@
-# 小纸巾 · 学习卷纸桌宠
+<div align="center">
 
-一只常驻桌面的「卷纸」桌宠：纸带从卷筒向下滚出，每张纸承载一条内容（单词卡片 / 休闲阅读片段 / 清单条目）。
-下拉撕纸阅读下一张，Shift 可把撕掉的纸找回来；学习 / 休闲 / 清单三种模式进度彼此独立，全部状态本地持久化。
+![学习模式：卷纸筒上挂着一张单词卡](assets/screenshots/01-learn.png)
 
-> 本目录是按《架构设计文档 v1.0》《接口设计文档 v1.0》《功能清单》实现的**完整工程**（P0 + P1 全量）。
-> 旧的 `main.js` / `desk-pet.html` 保留在项目根目录作为参考，本工程独立可运行。
+# 卷纸 · 学习桌宠
 
-![学习模式](docs/screenshots/01-learn.png)
+<sub>Tissue · Roll-paper Study Companion</sub>
 
-向下拉动纸带时，新纸从卷筒下方进入、把原来的纸往下推。**拖动过程中一张都不撕**——拉多长都原样挂着，纸带长度只受内容量限制（学习模式是无限的）；**松手才结算**：够阈值就在最下面把纸撕掉，不够阈值就停在原地。两种情况页面上的字都不会跳，回弹也没有。永远不会有纸被窗口裁掉：
+**一张纸一件事。拉下来看，撕掉就换下一件。**
 
-![拉出纸带](docs/screenshots/05-pull.png)
+*One thing per sheet. Pull to read, tear to move on.*
 
-设置中心可以拖动标题栏挪到任意位置，快捷键支持录键式改绑（含学习模式的「不显示当前词 / 标星当前词」）：
+![License: MIT](https://img.shields.io/badge/License-MIT-2563eb.svg)
 
-![快捷键设置](docs/screenshots/06-keys.png)
+![Electron](https://img.shields.io/badge/Electron-28-47848f.svg)
+
+![Platform](https://img.shields.io/badge/Platform-Windows%2010%2F11%20%C2%B7%20macOS-0f172a.svg)
+
+![i18n](https://img.shields.io/badge/i18n-zh%20%C2%B7%20zh--TW%20%C2%B7%20en%20%C2%B7%20ja%20%C2%B7%20fr-16a34a.svg)
+
+<sub>Windows 10/11 · macOS · 17,000+ 内置词条 · ≈17.4k 行代码 · 397 个文案 key × 5 语种</sub>
+
+</div>
 
 ---
 
-## 快速开始
+一个卷纸筒常驻在桌面上，纸带从筒口垂下来，一张纸写一件事——一个单词、一段文章、一条待办。把纸往下拉，最前面那张撕掉，下一张就接上。学习、阅读、清单三种模式各记各的进度，所有数据只留在这台电脑上，程序不联网。
+
+A roll of paper — **Tissue** — sits on your desktop. Each sheet holds one thing — a word, a passage of an article, a to-do. Pull the strip down, tear the front sheet off, and the next one takes its place. Study, reading and checklist are three independent modes, each with its own progress. Everything stays on your machine; the app never talks to the network.
+
+---
+
+## 亮点 · Highlights
+
+### 01 · 拉纸只动纸带，松手才结算
+
+拖的时候一张纸都不撕，指针和回溯栈纹丝不动；松手才结算，三条分支都遵守同一条规矩——**屏幕上内容一像素不动，只有底部在变**。
+
+- 整张滑出视口下边界的纸 → 静默退役（批量算一次，不逐张动画）
+- 还看得见、又够阈值 → `flushTear` 撕掉最下面几张，其余纸坐标完全不变
+- 不够阈值 → 停在原地，**一点也不回弹**
+
+所以拖到一半松手，字不会跳一下；撕纸时也不会出现「整条纸带上滑」那种跳页。也正因为视口高恒等于「纸高 + 已拉出的量」，视口底边天然压在纸张边界上，停在任意位置都不会切掉半张纸。
+
+<p align="center"><img src="assets/screenshots/02-pull.png" width="280" alt="向下拉出纸带，纸继续从卷筒下方出来"></p>
+
+**EN** Nothing is torn while your finger is down — the pointer and the undo stack stay frozen. The tear is settled on release, and all three branches follow one rule: **nothing on screen moves except the bottom edge.** Sheets that slid fully out of view are retired in a single batch; sheets still visible past the threshold are removed with a silent flush, so every other sheet keeps its exact position; below the threshold the strip simply stays put, with no spring-back. Because the viewport height always equals "one sheet plus what you pulled", its bottom edge lands on a sheet boundary — it can never cut one in half.
+
+### 02 · 能拉多长，只由内容决定
+
+视口长到上限之后 `pull` 就封顶，多出来的位移全部记在 `retract` 上，纸带继续在视口里往下滚——纸带长度和窗口高度无关，学习模式是无限的。
+
+整个拖拽过程**一次 `win:resize` 都不调**。Windows 上透明无边框窗口整窗重排是卡顿主因，这里改成纸带自己滚、窗口不动。
+
+**EN** Once the viewport hits its cap, further movement is recorded as scroll instead of height, so the strip keeps rolling inside a window that never resizes. Reflowing a transparent frameless window on every frame is the main source of jank on Windows; this design avoids it entirely.
+
+### 03 · 纸带是虚拟化列表，不是动画
+
+内容由 `provider.getPaper(index)` 这个纯函数给出，DOM 只是 `index` 的缓存，任何时候常驻节点不超过 15 个。指针只有 `TearController` 能改，撕纸和回溯都是「指针先变 + 位移同步补偿 + 动画归零」，所以视觉连续、内容不闪。
+
+实测 1 万词条的词库滚动无掉帧；超长单词（45 字符英文 / 15 字中文）自动缩字号并折行，**不裁字尾**。
+
+**EN** Papers come from a pure function of the index, and the DOM is just a cache — never more than 15 live nodes. Only the tear controller mutates the pointer, and both tearing and undoing compensate the visual offset, so content never flickers. A 10,000-entry word list scrolls without dropped frames; very long words shrink and wrap instead of being clipped.
+
+### 04 · 三种模式，各记各的账
+
+| 模式 | 一张纸是什么             | 进度怎么记                 |
+| -- | ------------------ | --------------------- |
+| 学习 | 一个单词（词形 / 音标 / 释义） | 已撕到第几张，重启接着来          |
+| 阅读 | 一段文章的一页            | 按字符偏移锚定，改字号、缩放后仍停在同一段 |
+| 清单 | 清单的一页（可勾选、星标、随记）   | 当前首屏第几页               |
+
+切模式只换内容源和回溯栈，互不干扰；每种模式有自己的空态文案，不会出现「学习模式的提示跑到清单里」。
+
+**EN** Switching modes swaps the content provider and the undo stack, nothing else. Reading progress is anchored to a character offset, so it survives font-size and zoom changes; study progress survives restarts.
+
+### 05 · 五种语言，一个 i18n 实例
+
+设置 → 通用 → 界面语言：简体中文 / 繁體中文 / English / 日本語 / Français，另加「跟随系统」。
+
+一份词典两个进程共用：`renderer/js/locales/*.js` 是 UMD 文件，主进程 `require()`、界面用 `<script>` 加载，只有一套文案。切完语言，界面、纸面右键菜单、托盘菜单、窗口标题、连排版窗口一起换。
+
+两个地方最容易出错，这里都踩过：
+
+1. **语言名是数据键**。「英语」「其他1」既是显示名也是数据键，翻译了写回就是新语言、老数据全对不上。所以显示走 `langName()`，写回永远用中文原值。
+2. **原生 UI 是一次性快照**。托盘菜单拼好就固定，切语言必须 `tray.refresh()` 重建，否则菜单还是旧语言。
+
+<p align="center"><img src="assets/screenshots/07-settings-en.png" width="330" alt="英文界面下的设置中心"></p>
+
+**EN** One dictionary, two processes: the locale files are UMD modules, so the main process `require`s the very files the renderer loads with `<script>`. Switching a language repaints the UI, the paper context menu, the tray menu, window titles and the formatting window at once. Two traps: language names double as data keys (translate the display, never the stored value), and native menus are one-shot snapshots that must be rebuilt.
+
+### 06 · 排版窗口，用起来像 Word
+
+清单里的任意一条都能单独排版：独立窗口（默认 300×240，拉大后记住）、`Ctrl+S` 保存、`Esc` 取消。工具带上有加粗 / 斜体 / 下划线 / 删除线 / 曲线（波浪线）、10–32px 字号，以及仿 Office 的点开式色板——`A` 选字色、`ab` 选突出显示，8×3 主题色 + 任意十六进制。
+
+高亮一律存成半透明，黑纸上也不会把浅色字吃掉；纸色跟随主程序的黑白主题，编辑器开着时切主题立刻跟着变。保存只回传 HTML，由主窗口净化后才落盘，脚本和外部样式一律丢弃。
+
+<p align="center"><img src="assets/screenshots/06-editor.png" width="380" alt="排版窗口：工具栏、彩色文字与高亮"></p>
+
+**EN** Any checklist item opens in its own formatting window with bold / italic / underline / strike / wavy, a size picker and an Office-style swatch popover. Highlights are stored semi-transparent so they work on a black sheet too. Saving returns HTML only, and the main window sanitises it before writing.
+
+### 07 · 导入不挑格式
+
+| 格式             | 怎么处理                                                     |
+| -------------- | -------------------------------------------------------- |
+| `.docx`        | 自己解 OOXML，文字 / 公式 / 占位符按原顺序取出；OMML 公式转 Unicode；表格按行合并    |
+| `.pdf`         | pdfjs 取文本项，按坐标聚行重排；四列词表（序号 / 单词 / 音标 / 释义）改走按列切块，续行并回上一条 |
+| `.txt` / `.md` | BOM → chardet → gb18030 三级兜底，不乱码                         |
+| `.doc`         | 明确拒绝并提示另存为 `.docx`，不假装能读                                 |
+
+导入词表时还能顺手选语言（学习语言 / 释义语言两个下拉互斥），选错了事后在设置里改，进度不丢。
+
+**EN** docx is parsed from OOXML directly (order preserved, OMML converted to Unicode, tables merged per row). PDFs go through coordinate-based line regrouping, with a separate column-slicing path for four-column vocabulary layouts. Plain text tries BOM, then chardet, then gb18030.
+
+### 08 · 数据只在自己电脑上
+
+五个 JSON 分文件（`settings` / `learn` / `leisure` / `checklists` / `torn`），写入走「`.tmp` → `.bak` → `rename`」的原子流程。撕纸、勾选、切模式这类操作即时落盘，滚动位置这种高频小改动防抖 500ms。
+
+文件真坏了不会静默重置：自动尝试 `.bak`，然后把「哪个文件坏了、是恢复了还是重置了」在窗口加载后提示一次——不让你以为「设置自己变回去了」。
+
+**EN** Five JSON files, atomic writes via tmp → bak → rename. Critical actions are flushed immediately, cosmetic state is debounced. If a file is corrupt the app falls back to `.bak` and tells you which file broke and what it did about it.
+
+---
+
+## 界面一览 · Screens
+
+|                                                                                                                                   |                                                                                                                           |
+| --------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| <img src="assets/screenshots/03-dark.png" width="260" alt="黑夜模式"><br />**黑夜模式** — 黑纸白字，卷筒（SVG 造型层）也跟着变黑                           | <img src="assets/screenshots/05-guide.png" width="270" alt="使用说明"><br />**使用说明** — 四档（上手 / 常用 / 进阶 / 疑难）、36 条一句话，第一次打开自动弹 |
+| <img src="assets/screenshots/04-settings.png" width="340" alt="设置中心"><br />**设置中心** — 通用 / 撕纸 / 模式 / 快捷键 / 数据五个分区，语言、纸张、启动、说明一页管完 | <img src="assets/screenshots/07-settings-en.png" width="340" alt="英文界面"><br />**英文界面** — 同一套布局，标签变长也不溢出                   |
+
+---
+
+## 部署与分发 · Deploy & Distribution
+
+### 环境要求 · Requirements
+
+| 项       | 要求                                             |
+| ------- | ---------------------------------------------- |
+| Node.js | 18 或更高（Electron 28 自带 Node 18）                 |
+| npm     | 9+                                             |
+| 系统      | Windows 10/11 x64（已出包）；macOS 12+（可运行，需自行加构建目标） |
+| 磁盘      | 源码 + 依赖约 600MB，安装包 91MB                        |
+
+### 从源码运行 · Run from source
 
 ```bash
-cd new
-npm install          # 依赖：mammoth / pdfjs-dist / chardet / iconv-lite / franc-min / jszip / electron
-npm start            # 启动
-npm run smoke        # 无界面自检：4 秒后打印渲染层状态并退出（开发用）
-npm run build        # electron-builder 打包（词库以 extraResources 随包分发）
+git clone https://github.com/xiaoyuanyysx/tissue-pet.git
+cd tissue-pet
+npm install          # 首次会下载 Electron（约 90MB）
+npm start            # 启动桌宠
 ```
 
-> Electron 下载慢时可加镜像：`set ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/`（PowerShell：`$env:ELECTRON_MIRROR=...`）
+国内下载 Electron 慢，先设镜像再装：
 
-内置词库从工程根目录的 `词库/` 读取（中考 / 高中 / 四级 / 六级 / 雅思），打包后从 `resources/词库/` 读取。
+```bash
+npm config set ELECTRON_MIRROR https://npmmirror.com/mirrors/electron/
+# PowerShell: $env:ELECTRON_MIRROR="https://npmmirror.com/mirrors/electron/"
+```
 
----
+`canvas` 走 N-API 预编译二进制，正常不需要本地编译；万一装失败，`npm rebuild canvas` 再试一次。
 
-## 目录结构
+### 打包 · Build installers
+
+```bash
+npm run i18n:check   # 先验一遍五份词典（key 齐平 / 变量一致）
+npm run build        # electron-builder，约 3–4 分钟
+```
+
+产物在 `dist/`：
 
 ```
-小纸巾/                       # 工程根目录（Electron 直接从这里启动）
-├── main/                     # 主进程：唯一拥有系统能力的一层
-│   ├── index.js              # 生命周期 / 单实例 / 服务装配 / IPC 注册
-│   ├── window-manager.js     # 透明置顶 / 穿透 / DPI / 缩放 / 隐藏恢复 / 置顶重申
-│   ├── editor-window.js      # 「高级编辑」独立窗口（纸色跟随主题，保存只回传 HTML）
-│   ├── tray.js               # A4 托盘（显示隐藏、模式、回溯、自动撕拽、退出）
-│   ├── shortcuts.js          # A5 快捷键双轨（globalShortcut + before-input-event）
-│   ├── persist.js            # A3 分文件 + 原子写 + critical/ordinary 分级 + 损坏自愈
-│   ├── ipc-router.js         # 通道注册 + IpcResult 统一包装
-│   ├── dict-service.js       # B1 内置词库 / B3 导入词库（同一读取接口）
-│   ├── paths.js              # 词库与资源目录解析
-│   └── importer/
-│       ├── index.js          # 导入管线 + 语言识别 + 词条行切分
-│       ├── docx.js           # OOXML 自解析（保序：文字 / 公式 / 占位符；表格按行合并）
-│       ├── omml.js           # 轻量 XML 解析 + OMML → Unicode 数学串
-│       ├── pdf.js            # pdfjs 文本项 → 按坐标聚行重排
-│       └── text.js           # txt/md + 编码检测（BOM/chardet/gb18030 兜底）
-├── preload.js                # contextBridge → window.petAPI（白名单）
-├── preload-editor.js         # 编辑窗口专用桥（payload / save / close）
+dist/tissue-pet Setup 3.1.0.exe     NSIS 安装版（可选安装目录、建桌面快捷方式）
+dist/tissue-pet 3.1.0.exe           portable 绿色版（单文件，双击即用）
+```
+
+两条必须知道的打包规则：
+
+1. **`build.files` 是白名单**。`preload-editor.js` 不在 `main/**` 或 `renderer/**` 下，漏写就进不了 `app.asar`，装完打开排版窗口直接报错——开发态完全正常，最容易漏。改完跑一次对账：
+   ```bash
+   npx --no-install asar list dist/win-unpacked/resources/app.asar | grep preload
+   #  \preload-editor.js
+   #  \preload.js
+   ```
+2. **词库靠 `extraResources` 分发**。源码里读 `vocab/`，打包后读 `resources/vocab/`，不是打进 asar 的。
+
+macOS 目前没有预置构建目标。要出 dmg 就在 `package.json` 的 `build` 里加 `mac` 段，并准备签名证书（未签名只能本机运行）。
+
+### 目录结构 · Layout
+
+<details>
+
+<summary>展开（点击）· Click to expand</summary>
+
+```text
+tissue-pet/
+├── main/                       主进程：唯一拥有系统能力的一层
+│   ├── index.js                生命周期 / 单实例 / 服务装配 / IPC
+│   ├── window-manager.js       透明置顶 / 穿透 / DPI / 缩放 / 隐藏恢复
+│   ├── editor-window.js        排版独立窗口
+│   ├── tray.js                 A4 托盘菜单
+│   ├── i18n.js                 主进程文案（与界面共用一份词典）
+│   ├── auto-launch.js          开机自启动（含换路径自愈）
+│   ├── shortcuts.js            快捷键双轨
+│   ├── persist.js              分文件 + 原子写 + 损坏自愈
+│   ├── ipc-router.js           通道注册 + 统一结果包装
+│   ├── dict-service.js         内置 / 导入词库
+│   ├── paths.js                资源与词库目录解析
+│   └── importer/               docx（OOXML 自解析）/ pdf / txt·md
+├── preload.js · preload-editor.js   两个 contextBridge 白名单
 ├── renderer/
-│   ├── desk-pet.html         # 入口页（卷筒 SVG 造型层原样保留）
-│   ├── editor.html           # 独立编辑窗口（像 doc：工具栏 + 纸面编辑区）
-│   ├── css/app.css           # 主题（含黑夜模式变量）
-│   ├── css/editor.css        # 编辑窗口样式
+│   ├── desk-pet.html · editor.html
+│   ├── css/                    app.css（含黑夜变量）· editor.css
 │   └── js/
-│       ├── app.js            # 渲染层总控（装配、动作、菜单、导入、清单操作）
-│       ├── editor.js         # 编辑窗口逻辑（工具栏 / 实时页数估算 / Ctrl+S）
-│       ├── rich.js           # 富文本解析·净化·按纸宽断行（分页与渲染共用同一套）
-│       ├── renderer-store.js # A3 状态镜像与分级上报
-│       ├── pet-view.js       # 造型层封装（禁改结构，仅参数化）
-│       ├── util.js           # 命名空间 / IpcResult 解包 / 离屏测量
-│       ├── engine/           # paper-stream（逻辑纸虚拟化）/ tear-controller / backtrack-stack
-│       ├── providers/        # learn / leisure / checklist / mode-router
-│       ├── leisure/          # paginator（确定性分页）/ measure（断行测量）
-│       └── ui/               # settings-center / context-menu / scale-corner / interaction-layer / window-drag / toast
-├── resources/tray.png        # 托盘图标
-├── 词库/                     # 内置词库（中考 / 高中 / 四级 / 六级 / 雅思，Tab 分隔 txt）
-├── docs/                     # 接口设计文档 / 架构设计文档 / 开发进度文档 / screenshots
-├── 功能清单.md               # 需求功能清单
-└── 项目需求简述.txt          # 需求背景
+│       ├── app.js              渲染层总控
+│       ├── engine/             paper-stream / tear-controller / backtrack-stack
+│       ├── providers/          learn / leisure / checklist / mode-router
+│       ├── leisure/            paginator（确定性分页）/ measure
+│       ├── ui/                 settings-center / guide / context-menu / …
+│       ├── i18n.js + locales/  五语种词典（zh-CN / zh-TW / en / ja / fr）
+│       └── editor.js · rich.js · pet-view.js · util.js
+├── assets/screenshots/         文档配图（7 张）
+├── build/icon.ico              应用图标（16–256 七档，脚本生成）
+├── resources/tray.png          托盘图标
+├── vocab/                      内置词表（中考 / 高中 / 四级 / 六级 / 雅思）
+├── scripts/                    check-i18n.js · make-icon.js
+└── LICENSE
 ```
 
+</details>
+
+### 常用命令 · Commands
+
+| 命令                          | 作用                                  |
+| --------------------------- | ----------------------------------- |
+| `npm start`                 | 启动                                  |
+| `npm run smoke`             | 无界面自检，4 秒后打印渲染层状态并退出（仅开发态）          |
+| `npm run i18n:check`        | 五份词典对账：key 齐平、`{变量}` 一致、说明结构一致、反扫漏译 |
+| `npm run build`             | 打包安装版 + 绿色版                         |
+| `node scripts/make-icon.js` | 重新生成应用图标                            |
+
+
+### 常见问题 · Troubleshooting
+
+**启动后桌面上什么都没有**
+窗口可能被隐藏了（托盘「隐藏/显示」是同一个开关），按 `Ctrl+Shift+P` 或点托盘图标叫回来。如果之前拖到了屏幕外，重启后会被钳回工作区；多显示器拔掉后也是同样处理。
+
+**打包版词库下拉是空的**
+`extraResources` 没带上。检查 `dist/win-unpacked/resources/vocab/` 里有没有那几个 `.txt`——词库不进 asar，走的是资源目录。
+
+**安装版打开排版窗口报错或空白**
+`preload-editor.js` 没进 `app.asar`（见上面第 1 条）。用 `npx --no-install asar list` 对一下，缺了就补进 `build.files` 重新打包。
+
+**改了 `main/**` 不生效**
+主进程没有热重载，改完要 `Ctrl+C` 再 `npm start`；只改 `renderer/**` 的话 `Ctrl+R` 刷新窗口就够。
+
+**EN** Nothing on screen after launch? The window is probably hidden — press `Ctrl+Shift+P` or click the tray icon. Empty word-list dropdown in a packaged build? `extraResources` did not include `vocab/`. Formatting window broken after install? `preload-editor.js` is missing from `app.asar`. Main-process changes need a restart; renderer changes just need a reload.
+
 ---
 
-## 功能实现对照
+## 怎么用 · How to use
 
-| 模块 | 实现要点 |
+1. **拖**：按住卷筒或纸面空白处，把桌宠挪到任意位置。
+2. **拉**：按住纸面往下拖，纸带跟着出来；松手结算（够阈值撕一张，不够停住）。
+3. **捡回来**：按 `Shift`（窗口聚焦时）或 `Ctrl+Shift+B`，也可以点托盘「回溯上一张」，找回刚撕掉的纸（默认 10 张，上限 50）。
+4. **右键**：纸面上右键改样式、标星、写随记、交换上下语言；空白处右键切模式。
+5. **齿轮**：改语言、纸张高度、字号、黑夜模式、快捷键、数据备份，以及打开使用说明。
+
+第一次打开会自动弹一次使用说明，之后在 设置 → 通用 里再打开。
+
+**EN** Drag the roll to move the pet. Pull the sheet down to advance. Press `Shift` while the window is focused, or `Ctrl+Shift+B`, or use the tray menu, to bring back what you just tore (10 by default, 50 max). Right-click the sheet to restyle, star, annotate or swap languages; right-click empty space to switch modes. The gear opens language, paper size, dark mode, shortcuts and data tools.
+
+---
+
+## 数据与隐私 · Data & privacy
+
+程序不联网、不上报、不带统计。所有状态在 Electron 的 `userData` 目录：
+
+| 平台 | 路径 |
 |---|---|
-| A1 三模式 | `ModeRouter` + 三个常驻 Provider，各自独立序列化；切换只换内容源与回溯栈 |
-| A2 设置中心 | 齿轮图标展开，五个分区（外观 / 撕纸 / 模式 / 快捷键 / 数据）；打开时窗口向右扩展 330px，不遮挡桌宠 |
-| A3 持久化 | `userData/` 下 5 个 JSON 分文件；critical（撕纸/回溯/勾选/切模式/标星/导入）即时原子写，ordinary 防抖 500ms；`.tmp → .bak → rename`；损坏自动回落默认值并提示 |
-| A4 托盘 | 显示/隐藏、三模式单选、回溯、自动滚落、退出；托盘只发意图，业务由渲染层执行；「回溯上一张」按渲染层上报的**内存栈深度**实时启用/置灰（`tray:syncBacktrack`） |
-| A5 快捷键 | 四类动作 × 双轨；录键式改键、冲突检测（返回被占用动作名）、全局轨格式校验、热更新 |
-| A6 DPI/多显示器 | 全程 DIP；窗口位置记录 `displayId + x/y`，显示器增删/分辨率变化时钳回工作区；拖动卷筒可移动桌宠 |
-| A7 右键菜单 | 自绘 HTML 菜单，按模式与命中对象动态生成 |
-| B1–B8 | 五套内置词库、词条卡片（自适应字号：常规词单行缩放，超长词折行且按行数二次缩字号，**不裁字尾**）、词库导入、不显示/标星（**按语言分组**：同级词库共用、跨语言隔离）、确定性打乱、隐藏释义、进度持久化；设置中心提供**词库管理**（列出导入词库、删除、自动切回内置）与**语言切换**（导入时选错可事后改，见下） |
-| C1–C5 | docx/md/txt/pdf 导入、确定性分页（内容偏移锚点）、OMML 公式转 Unicode、非文字占位符（图片/音频/视频，含 **PDF 页内图片** `[.png 图片]`、docx 内嵌音视频按真实扩展名）、单文件进度永不丢失 |
-| D1–D5 | 多清单增删改切、条目文字可改（设置面板**双击** / 纸上右键「修改文字…」）、纸上右键改样式（颜色/加粗/划线/勾选）、拖拽排序、持久化；**高级编辑**（独立窗口：字号、**Office 式点开色板**选字色/突出显示、加粗/下划线/删除线，纸色跟随黑白主题）、纸面按行分页**永不裁字**；纸带**循环浏览**（拉到底接回第一页）、**不撕纸开关**（默认滚动浏览，关掉按撕纸阈值一张张撕）、**自动序号**（1. 2. 3. 按添加顺序，删中间一条后面自动补）|
-| E1–E8 | 字号、黑夜模式、自动滚落（**按 px/秒 连续下落**，每满一张自动撕并入栈）、回溯（默认 10、硬上限 50、溢出提示）、左上角缩放角、尺寸由 scale 统一驱动、置顶强化、隐藏/恢复 |
+| Windows | `%APPDATA%\tissue-pet\`（开发态与安装版同名） |
+| macOS | `~/Library/Application Support/tissue-pet/` |
 
-### 验收标准对照
+> 改名前的版本（程序名叫「学习卷纸桌宠」）数据放在 `%APPDATA%\学习卷纸桌宠\`。新版读的是 `tissue-pet`，旧数据不会自动搬过去——需要的话把这五个 JSON 拷进新目录即可。
 
-1. 强杀进程重启 → 学习索引 / 已撕纸 / 清单勾选 / 设置全部恢复（回溯栈按需求改为「仅本次运行」，不参与恢复；已用 `--smoke-test` 实测）
-2. 1 万词条不卡顿（分块拉取 + 虚拟化，DOM 常驻 ≤ 15 节点）；超长单词自动缩字号；无乱码
-3. 缩放/改字号后按内容锚点重定位，字与纸对应关系不变
-4. 隐藏后托盘 / `Ctrl+Shift+P` 恢复，状态零丢失
-5. 回溯上限内可恢复，超限提示「最早的纸已不可恢复」
-6. 黑夜模式黑底白字，**卷筒（SVG 造型层）也一起变黑**，重启保持
-7. 多显示器 / 125%·150% DPI 下置顶与缩放正常（DIP + 置顶重申 + 位置钳制）
-8. 导入错误文件返回中文错误提示，进程不崩溃、不输出乱码
+| 文件 | 内容 |
+|---|---|
+| `settings.json` | 主题、缩放、语言、快捷键、面板位置、当前模式 |
+| `learn.json` | 学习进度、标星、不显示词、词库语言 |
+| `leisure.json` | 阅读进度、资料库索引 |
+| `checklists.json` | 清单、条目富文本、随记、勾选 |
+| `torn.json` | 各模式当前纸位（回溯栈不落盘，只服务本次运行） |
+
+换电脑迁移：退出程序，把这五个文件复制到新机器的同一位置即可。「恢复默认设置」「清空全部数据」不会动导入的文档与词库文件，需要单独删。
+
+**EN** No network, no telemetry. All state lives in five JSON files under `userData`. To migrate, quit the app and copy those files. "Reset settings" and "Clear all data" never touch imported documents or word lists. Builds before the rename kept their data in `%APPDATA%\学习卷纸桌宠\` — copy those five JSON files into `%APPDATA%\tissue-pet\` to carry progress over.
 
 ---
 
-## 关键机制说明
+## 关键机制 · How it works
 
-**逻辑纸模型**：内容由 `provider.getPaper(index)` 纯函数给出，DOM 只是 `index` 的缓存；`top` 指针只由 `TearController` 修改（撕纸 +n / 回溯 −n）。撕纸与回溯都用「指针先变 + `shift` 位移同步补偿 + 动画归零」保证视觉连续，绝不出现内容闪烁。
+**逻辑纸模型**：内容由纯函数产出，DOM 是 `index` 的缓存；指针只由 `TearController` 改。撕纸与回溯都遵循「指针先变 → 位移同步补偿 → 动画归零」，所以视觉连续。
 
-**纸带方向（与参考实现一致）**：单张纸的纵向位置是 `y(ci) = shift − (ci − top) × 纸高`（`shift = pull − retract`），即 **index 越大越靠上**。向下拉纸时，新纸从卷筒下方进入、把原来的纸一路推向下；最早拉出来的那张最终落在最下面（也最先被撕）。所以视觉顺序始终是「卷筒下方 = 最新进入，纸带末端 = 最早进入」。撕纸时撕的是最下面那几张，视口从底部平滑收回，内容一像素都不动。
+**纸带方向**：单张纸的位置是 `y(ci) = shift − (ci − top) × 纸高`，index 越大越靠上。下拉时新纸从卷筒下方进入、把旧纸往下推；最先拉出来的落在最下面，也最先被撕。
 
-**拉纸 = 只动纸带，不动窗口**：手势变量是 `shift`（纸带整体位移），视口高 = `min(viewportCap, 纸高 + pull)`，其中 `pull = min(shift, pullCap)`、`retract = pull − shift`。**视口长到上限之后 `pull` 不再增长，多出来的位移全记在 `retract` 上，纸带继续在视口里向下滚** —— 所以「能拉多长」只受内容量限制，和窗口高度无关，想拉多少拉多少。窗口高度在启动/缩放/移动桌宠时按「屏幕从当前位置往下还剩多少」定一次，拖纸过程中**完全不调用 `win:resize`**（Windows 透明无边框窗口整窗重排是卡顿主因）。
+**确定性分页**：离屏 canvas 逐字测量断行，产出带 `charStart/charEnd` 的页计划；缓存键是 `docId:纸宽:字号:纸高`。布局变了就按字符锚点二分找新页号，进度不丢。
 
+**窗口移动**：不用 `-webkit-app-region: drag`（在「有 transform 缩放 + 透明 + 穿透」三件事叠加时命中测试会失效），改成 `pointermove` 增量 + `win:moveBy`，同时临时关掉穿透。
 
-**松手才结算，撕纸不跳页**：拖动过程中 `_onMove` 只调 `setShift`，一张纸都不撕（`top` 和回溯栈纹丝不动）；`settle()` 是唯一的结算点，三步都遵循同一条原则——**屏幕上内容一像素不动，只有底部在变**：
-1. `retireOffscreen()` —— 把「整张滑出视口下边界、用户根本看不见」的纸静默退役。判定 `shift ≥ 视口高`，批量 `n = ⌊(shift−vh)/纸高⌋+1` 一次做完。
-2. 剩下的位移在视口里且 `shift ≥ 撕纸阈值`：`n = 1 + ⌊(shift−阈值)/纸高⌋`（不超过拉满的整张数），用 **`flushTear(n)` 静默撕**——最下面那几张连同视口底部一起消失，其余纸的坐标完全不变。**不做「纸带整体上滑」的过渡**，那正是「页面跳一下」的来源。
-3. `shift < 阈值`：**停在原地，一像素都不动**。
+**鼠标穿透**：`mousemove + elementFromPoint` 命中白名单；新增浮层必须把选择器加进 `InteractionLayer`，否则那块区域会穿透到桌面。
 
-`flushTear` 与 `tear` 的区别只在最后一步：`tear` 会 `animate` 把位移滑回去（纸带整体上移，观感是抽走一张然后页面跳），`flushTear` 直接 `top += n` 且 `shift −= n×纸高`，两者同步所以可见内容零跳变。拖拽松手、滚轮都用 `flushTear`；只有自动滚落用 `tear`（连续滴落时那点滑动反而是过渡）。
-
-之所以能不做吸附：视口高 = 纸高 + `pull`，纸带按整张纸高对齐，视口底边天然压在纸张边界上，停在任意位置都不会切一半纸。
-
-**纸带几何**：纸带水平位置 = `ROLL_AXIS_X(250) − 纸宽/2 + PAGE_OFFSET_X(−6)`，即先以卷筒轴线居中、再整体左移 6px。卷筒右下沿是一段向内收的弧线（`335,180 → 300,230`），纸若正好压满 `165..335`，右上角会露在弧线外侧、看着像「纸比卷筒宽」。纸的顶边不做任何圆角裁剪：它是一刀平口，直接塞进卷筒底下（卷筒 `z-index: 10` 盖住上沿 20px），加圆角反而像一张卡片浮在卷筒下面。
-
-**回溯只服务本次运行**：回溯栈保存在内存里，进磁盘的 `torn.*.stack` 恒为 `[]`；重启后栈为空，不会回溯到上次启动前的内容。启动时用 toast 提示一次「最多保留 N 张」，可在设置 → 撕纸里关掉；栈溢出提示每次运行也只弹一次。
-
-**自动滚落**：`rAF` 循环按 `pxPerSec × dt` 连续累加 `pull`（dt 上限 40ms，防止窗口被节流后一次跳好几张），满一张就撕一张再继续，速度在设置里以 **px/秒** 配置（5–120，默认 20）。循环带代际令牌，重复启停不会出现双循环导致速度翻倍。
-
-**窗口移动**：不用 `-webkit-app-region: drag`——它在「舞台有 `transform`（缩放）」+「透明窗口」+「穿透 toggle」叠加时命中测试会失效，表现为桌宠钉死在屏幕中间。改为 `.drag-zone` 上监听 `pointerdown/pointermove`，用 `screenX/Y` 增量调 `win:moveBy`，同时 `interaction.setForced(true)` 临时关闭穿透，缩放后依然跟手。
-
-**确定性分页**：`Paginator` 用离屏 canvas 逐字测量断行，纯函数产出 `PagePlan[]`（含 `charStart/charEnd` 全局字符偏移）；缓存 key = `docId:纸宽:字号:纸高`。布局变化后按锚点二分查找新页号，进度不受影响。
-
-**持久化分级**：`store:patch(scope, partial, {critical})`；critical 同步原子写，ordinary 进 500ms 防抖队列；退出前 `flush()` 兜底。读到损坏文件时会自动尝试 `.bak`，**并把「哪个文件坏了、是恢复还是重置」在窗口加载后 toast 一次**（`persist.warnings` → `app:notice`），不再让用户以为「设置自己变回去了」。
-
-**快捷键双轨**：窗口聚焦时走主进程 `before-input-event`（支持单独 `Shift`），失焦/隐藏时走 `globalShortcut`（必须是组合键）；输入框获得焦点时暂停拦截，避免打字触发动作。可绑定动作共 6 个：回溯 / **不显示当前词** / **标星当前词** / 隐藏显示 / 自动滚落 / 切换模式，后两个学习模式动作默认只绑聚焦轨（`Control+Shift+H`、`Control+Shift+S`），全局轨留空不抢系统热键。
-
-**鼠标穿透**：`mousemove + elementFromPoint` 命中白名单（`.viewport / .drag-zone / .gear-btn / .scale-corner / .settings-panel / .context-menu / .toast-host / .modal` 等）。**白名单集中在 `InteractionLayer` 构造函数里**，新增浮层 UI 必须把选择器加进去，否则该区域会被判成透明区而穿透到桌面（旧版那个从未被调用的 `registerHitTarget()` 已删除，避免误导）。
-
-**隐藏释义 = 轻点显形**：`learn.hideDefinition` 打开时卡片只显示单词与音标，轻点纸面切换该张纸的 `.hidden-def`（以 `pointerdown/pointerup` 位移 < 4px、间隔 < 800ms 判定为「点」）。之所以不挂 `click`：拖纸时 `pointerdown` 起手就把 `.dragging` 加上、并可能触发页面重排，点位判定比 `click` 的命中更可靠。
+**EN** The strip is a virtualised list driven by a pure function; the DOM is a cache. Position is `shift − (index − top) × sheetHeight`, so newer sheets sit higher and are torn first. Pagination uses off-screen canvas measurement with a character-offset anchor, so progress survives layout changes. Window dragging avoids `-webkit-app-region` (it breaks with transforms plus transparency plus click-through) and uses pointer deltas instead.
 
 ---
 
-## 与设计文档的差异（有意取舍）
+## 已知限制 · Known limitations
 
-| 项 | 文档 | 本实现 | 原因 |
-|---|---|---|---|
-| 撕纸阈值 | 1–6 张，可调 | 0.5–6 张（步进 0.5），且只在**松手**时生效 | 拖动中不撕纸、松手才结算；剩纸不足时阈值自动收敛到剩余量，最后一张也能撕掉 |
-| 自动撕拽速度单位 | 张/分 | **px/秒**（5–120，默认 20） | 需求要的是「纸一直在向下移动」，按像素速度才能做到连续滚动而非逐张跳变 |
-| 窗口移动 | `-webkit-app-region: drag` | `pointer` 事件 + `win:moveBy` 增量移动 | 有 `transform` 缩放的透明窗口上系统拖拽区域命中测试会失效 |
-| 窗口高度 | 固定 | 启动时按「屏幕从当前位置往下还剩多少」定一次，拖纸期间**不 resize** | 逐帧 resize 透明无边框窗口是拖动卡顿的主因；纸带改为在视口内滚动，窗口就不必跟着长 |
-| 单词字号上限 | 45px | `min(72, 纸高×0.36)` | 45px 在 170px 纸宽下填不满一行，短词显得过小；仍受纸高约束不会溢出 |
-| 纸带方向 | index 越大越靠下 | index 越大越靠上（新纸从卷筒下方进入，旧纸被推到最下面并最先被撕） | 与 `desk-pet.html` 一致：下拉时最先出来的那张落在最后面，也最先被撕 |
-| 回弹 | 未达标整段弹回 | 未达阈值**完全不回弹**；达阈值也只撕底部、纸带不滑动 | 拖到一半弹回去最伤手感；撕纸时整条纸带上滑同样像「跳页」 |
-| 回溯范围 | 持久化栈 | 仅本次运行（落盘恒为 `[]`） | 重启后回溯到上次启动前的内容没有意义，也容易让人困惑 |
-| 上限提示 | 每次超出都提示 | 每次运行最多一次，且可关闭 | 反复弹同一条提示很吵 |
-| 面板位置 | 固定右上 | 可拖动，位置持久化（`settings.panelPos`） | 面板会挡住桌宠，需要能挪开 |
-| Esc | 关闭窗口 | 关闭菜单/弹窗/面板；全部关闭后才退出 | 设置中心内误按 Esc 直接退程序体验太差 |
-| 面板 ✕ | 关闭窗口 | 关闭设置面板（退出在托盘与右键菜单） | 同上 |
-| 词库目录 | `词库/` | 开发态取工程根目录 `词库/`（与 `package.json` 同级），打包时以 `extraResources/词库` 分发 | 工程已从 `new/` 子目录上移到根目录，`extraResources.from` 相应由 `../词库` 改为 `词库` |
-| 分块拉取 | 全文分块 | 拉全后渲染层分页（文档量级下更简单可靠） | 10 万字符级文档分页 < 100ms；分块接口 `doc:getBlocks` 已按文档实现 |
+- **PDF 只支持有文本层的文件**，扫描件返回提示，不做 OCR。页内图片按页末占位（`[.png 图片 × n]`）计入内容。
+- **docx 复杂公式**（矩阵嵌套、手写体）可能降级为 `[公式]`；常见上下标、分式、根式、求和积分可转 Unicode。
+- **拉丁语系细分不出**：法语 / 德语 / 西班牙语都记作「英语」；样本过短时不用 franc 猜，导入后手选即可。
+- **回溯只服务本次运行**：重启后栈为空，不会回到上次启动前的内容。
+- **清单默认不撕纸、只滚动**：每页只是同一个清单的分页视图，滚上去就回到第一页；想撕就在 设置 → 模式 → 清单 关掉「不撕纸」。
+- **开机自启动是系统级设置**，不在「恢复默认 / 清空数据」范围内。被任务管理器或安全软件禁用时，面板给「打开系统启动项设置」的直达按钮；程序搬家后手动打开一次即自愈。
+- **卸载前先关掉自启动**，否则 `Run` 里会留一条指向已删除程序的记录（系统会自行忽略）。
+- **Electron 28 已停止维护**，升级要重测透明窗口、穿透命中、DPI、canvas 全链路，留到下一版。
+- **网页抓取（P2）未实现**，只预留了扩展点。
 
-## 已知限制
+**EN** PDFs need a text layer (no OCR). Complex docx formulas may degrade to a placeholder. Latin languages other than English are not distinguished automatically — pick the language manually after import. The undo stack is per-session. "Tear mode" for checklists is off by default. Auto-start is a system setting, outside the data reset. Electron 28 is end-of-life; upgrading needs a full re-test of transparency, click-through and DPI.
 
-- PDF 仅支持有文本层的文件；扫描件会返回「可能是扫描件」提示，不做 OCR。文本层里的图片按**页末一条占位**（`[.png 图片 × n]`）计入内容，位置不如正文精确，但保证「不会凭空少一页图」。
-- 超长单词（12px 下实测宽度超过纸宽，如 `pneumonoultramicroscopicsilicovolcanoconiosis`，或较长的中日文词条）改走折行显示：字号先按「两行铺满」求一次，再按行数压到纵向放得下，**任何长度都不会裁掉词尾**（实测 45 字符英文 / 15 字中文：`scrollWidth == clientWidth`、纸张零溢出）。
-- 整个词库的词都被设为「不显示」时，纸面显示「这个词库的词已全部设为不显示，可在设置中心恢复」，不再偷偷把隐藏词又拿出来显示。
-- docx 复杂公式（矩阵嵌套、手写体等）可能降级为 `[公式]` 占位符；常见上下标/分式/根式/求和积分可转 Unicode。
-- **docx 表格按行合并**：一行表格 = 一条内容，单元格之间用制表符分隔（`type: 'table-row'`）。导入词库时第一格作词、其余格作释义；整行都是列名（`日文 / 中文 / 日文语法 / 中文意思`）的表头行自动跳过。休闲模式渲染时制表符显示为全角空格。
-- **日文词条的读音括号**：`施す（ほどこす）` 会拆成 词=`施す`、读音=`ほどこす`（存入 `phonetic`）；全角括号不再被当成「句子标点」拒掉。
-- **带音标的教材词表**（PDF 常见排版）：`12 approach ə'prəutʃ n.接近 途径` 这类「序号 + 单词 + 音标 + 词性.释义」的行，用词性缩写（`n. / vt. / adj. / ad. / aux.v.` …）作为音标与释义的分界，缺点的 `adj情合理的` 也能识别；PDF 断行造成的 `'stju dənt` 会拼回 `'stjudənt`。仅当首列是拉丁字母时启用，不影响中/日文词表。
-- **四列版式 PDF 按列切块**：`序号 | 单词 | 音标 | 释义` 的排版里序号是垂直居中的，释义又常折成 2~3 行，按 y 聚行必然把释义续行错挂到下一词条。识别到这种版式（最左列 60% 以上是纯数字、第二列 50% 以上含拉丁字母）改走「单词列出现的那一行 = 新词条起点」的按列切块，续行并回上一条；普通 PDF 仍走原段落流。
-- **整库语言一致性清洗**：英语词表里若有个别行「单词列整块丢失」（PDF 抽不出单词，行首变成释义里的中文），当拉丁词占比 ≥85% 且中文异常词 ≤5% 时直接丢弃这几十条残行，避免学习卡片上出现「汗」「跌」这种中文卡；中/日文词表与中英混排词表不受影响。
-- 词条识别率低于 50% 时按「不是词表」拒绝导入（`E_NOT_WORDLIST`），避免把正文误存成词库。
-- 「不显示词 / 标星词」按学习语言分组共用（`{ en: [...], ja: [...] }`），设置中心默认折叠，点标题才展开；列表只统计当前词库中真实存在的词，「不在当前词库」的那些折成一行计数。
-- **语言可在导入后改**：设置 → 模式 → 学习模式下方「语言」分区，**学习语言（上）/ 释义语言（下）两个下拉并排一行**，下面是「刷新纸面」按钮——下拉只改待应用值（旁边的状态会提示「有改动，点刷新生效」），点刷新才一次性落盘并重绘，**纸张进度（已撕到第几张）原样保留**。两个下拉**互斥**：各自只列另一种语言没占用的选项，所以永远选不出「上下同一语言」。手选值优先于自动识别，重启不会被改回去；被手改过会标成「语言（已手改）」。切换学习语言会把**当前词库里的词**从旧语言组迁到新组（同语言其他词库的记录不动），不会出现「改完语言标星全没了」。
-- **一键对调上下语言**：两个下拉中间有个小「⇄」按钮，**点一下就把学习语言和释义语言互换并立即生效**，不用先改成 A 再改成 B，进度照旧保留；纸面右键菜单里也有「交换上下语言」（只有一种语言时置灰）。对调期间按钮自动加锁，连点不会让两次写盘交错。
-- **纸面按语言取内容（不是标注）**：一条词条的各语言文本合成一份「语言池」`{ 英语:'apple', 中文:'n.苹果', 日语:'りんご' }`，**纸面上方取「学习语言」那份、下方取「释义语言」那份**。词形记 `srcWordLang`、原文释义记 `srcDefLang`，两个都属于「它们自己的语言」、不随手选漂移，所以内置词库也能做到「上方=中文/下方=英语」= 大字释义、小字单词。某一行没有该语言时回落原文，不会出现空行；上方换成译文时音标自动隐藏（音标属于词形那行）。
-- **导入时选语言**：导入对话框列出这本词表的**语言槽位**——词条列固定保留，释义语言可勾选（支持多语言的词表才可勾掉），每行右侧给出示例与条数。语言名可随意改写：点「其他」按 `其他1` → `其他2` 递增，也可以直接输入 `意大利语` 这类自定义名。每行只有一种释义语言的词表会**强制保留「词条 + 释义」两种语言**（勾选框禁用），只能改名。上下同名会被拦下（`E_LANG_DUP`）。
-- **词形的语言不跟着漂**：标星 / 不显示 / 进度锚点的键始终是**词条原始词形**（`paper.id`），不随显示语言变。
-- **多语言内容切分**：导入时若一行里有明确的多语言结构（`n.苹果 / りんご`、`n.尺子 - ものさし`、`n.猫 | cat`），按段识别语言存成 `translations`；同语言段合并、判不出语言或中文内部「；」（`n.书；书籍`）一律不切，保持原文。
-- 拉丁语系细分不出（法语/德语/西班牙语都记「英语」），且样本过短时不再用 franc 猜（百来个字符的英文词表会被判成德语），导入后手选即可。
-- 设置 → 模式 → 学习模式里提供「重置学习进度」，二次确认后回到第一张纸并清空本次运行的回溯栈，标星与不显示词不受影响。
-- 清单拖拽排序在设置中心的条目列表内进行（纸面上右键提供上移/下移）。
-- **清单默认不撕纸、只滚动**：清单的每一页只是同一个清单的分页视图，所以下拉/滚轮只是往下浏览（松手会对齐到整页），**滚上去就能回到第一页**，条目永远不会被「撕」走。位置（当前首屏第几页）仍然记在 `torn.checklist.headIndex` 里（存的是**页号对页数取模**），重启后回到原处。
-- **想要「撕纸」的感觉**：设置 → 模式 → 清单把「不撕纸」关掉（纸面右键也能切）。关掉后和单词模式一样：拉出超过「撕纸阈值」就撕掉一张，撕下来的能回溯，撕到底就空；这时纸带不再循环（撕完又绕回来等于白撕），进度改记「已撕几张」。
-- **清单循环浏览**：默认和单词模式一样是**无限纸带**——一直往下拉，到头会接回第一页；设置 → 模式 → 清单里的「循环浏览」可以关掉（关掉后拉到最后一张提示「已经到末尾了」）。循环模式下「自动滚落」也不会自己停。
-- **一个条目能写大段文字**：设置 → 模式 → 清单里的「高级编辑…」、条目后的「Aa」、纸面上**双击条目**或右键「高级编辑…」，都会打开一个**独立编辑窗口**（默认最小号 300×240，拉大后会记住，下次按上次的大小开）：上面一条工具带（加粗 / 斜体 / 下划线 / 删除线、10–32px 字号、Office 式点开色板选字色与突出显示），下面整块就是纸 —— 没有窗口灰底、没有纸张卡片、没有头尾栏，`Ctrl+S` 保存、`Esc` 取消。
-- **颜色仿 Office**：工具栏只有两个按钮 —— `A`（字体颜色，带细色条）和 `ab`（突出显示，带粗色条），**点一下才弹出色板**；色板是 8×3 的主题色（深/标准/浅），底部「自动 / 无颜色」+ 十六进制输入框可填任意色值。选完自动收起，点空白处或 `Esc` 也收起。突出显示落盘时统一转成半透明，黑夜模式的黑纸上也不会把字吃掉。底部实时显示「N 字 · M 行 · 约 K 张纸」，用的是纸面同一套断行代码，所以页数估得准。
-- **编辑窗口的纸黑白跟随主程序**：不开黑夜模式是白纸黑字，开了就是黑纸浅字——和桌宠纸面用同一组色值，且**编辑器开着时切主题也会立刻跟着变**。窗口本身只有两层底色（窗口一层 + 纸一层），不再一层套一层。
-- **突出显示用半透明底色**：黑纸上一块不透明的浅黄会把浅色文字吃掉，所以高亮一律存成 `rgba(...,0.42)` 这类半透明色，白纸黑纸都能看清字。纸面渲染走同一套富文本解析，高亮会跟着条目一起分页。
-- **清单自动序号**：设置 → 模式 → 清单里的「自动序号」开关（纸面右键也能切）。勾选后按**添加顺序**在纸面上标 `1. 2. 3.`，序号作为首行前缀参与断行（不会把首行挤出一个字），删掉中间一条后面的序号自动前移；关掉就完全恢复原样，数据里不写入任何序号。
-- **长文本不会裁字**：分页单位从「条目」改成「行」——按纸宽和每段自己的字号真实测量断行，纸面直接按断好的行渲染（标题高度也计入），一个条目跨页时续页不画勾选框。以前「最后一行总被纸边切掉」是因为可用高度漏算了标题行，v1.7 已修。
-- **编辑窗口不直接写盘**：保存时只把 HTML 回传给主窗口，由主窗口 `NS.Rich.sanitize` 净化（只留 `b/i/u/s/span(字号·颜色)/br`）后写入 `checklists`，脚本和外部样式一律丢弃。
-- 设置 → 数据 提供「恢复默认设置」（只重置外观/撕纸/快捷键）与「清空全部数据」（连学习进度、阅读进度、清单一起清），都有二次确认，重置后自动重载界面。**导入的文档与词库文件不在清空范围内**，需在对应分区单独删，避免误删用户资料。
-- C6 网页抓取为 P2 评估项，未实现（接口已预留扩展点）。
+---
+
+## 许可 · License
+
+[MIT](LICENSE) © 2026 xiaoyuanyysx

@@ -25,5 +25,11 @@ contextBridge.exposeInMainWorld('editorAPI', {
     const handler = (_e, p) => cb(p && p.dark);
     ipcRenderer.on('editor:theme', handler);
     return () => ipcRenderer.removeListener('editor:theme', handler);
+  },
+  /** 主窗口切界面语言 → 编辑窗口的按钮/提示跟着换（不用关掉重开） */
+  onLocale(cb) {
+    const handler = (_e, p) => cb(p || {});
+    ipcRenderer.on('editor:locale', handler);
+    return () => ipcRenderer.removeListener('editor:locale', handler);
   }
 });

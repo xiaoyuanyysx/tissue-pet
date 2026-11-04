@@ -1,31 +1,31 @@
-/* settings-center.js —— A2 设置中心（全部设置收纳于此，齿轮图标展开） */
+/* settings-center.js —— A2 设置中心（全部设置收纳于此，齿轮图标展开）
+   v3.0：外观并入「通用」（纸张/文字/语言/启动/说明一页管完，少一层翻找）；
+         文案全量走 i18n，切语言就地重绘。 */
 (function (global) {
   'use strict';
   const NS = global.XZ;
+  const t = (k, p) => NS.I18N.t(k, p);
 
+  /* 标签页顺序 = 从「最常改」到「最少动」：通用 → 撕纸 → 模式 → 快捷键 → 数据。
+     key 同时是 settings.tab.<key> 的词条名。 */
   const TABS = [
-    { key: 'look', label: '外观' },
-    { key: 'tear', label: '撕纸' },
-    { key: 'mode', label: '模式' },
-    { key: 'keys', label: '快捷键' },
-    { key: 'data', label: '数据' }
+    { key: 'general' },
+    { key: 'tear' },
+    { key: 'mode' },
+    { key: 'keys' },
+    { key: 'data' }
   ];
+
+  /** 旧版「外观」页的入口（托盘/快捷键里可能还带着 look），统一折到通用 */
+  const TAB_ALIAS = { look: 'general', global: 'general' };
 
   const ACTIONS = [
-    { key: 'backtrack', label: '回溯上一张' },
-    { key: 'toggleHidden', label: '不显示当前词' },
-    { key: 'toggleStar', label: '标星当前词' },
-    { key: 'toggleVisible', label: '隐藏/显示' },
-    { key: 'toggleAutoTear', label: '自动滚落' },
-    { key: 'switchMode', label: '切换模式' }
-  ];
-
-  const COLOR_CHOICES = [
-    { v: '', label: '默认' },
-    { v: '#dc2626', label: '红' },
-    { v: '#2563eb', label: '蓝' },
-    { v: '#16a34a', label: '绿' },
-    { v: '#d97706', label: '橙' }
+    { key: 'backtrack' },
+    { key: 'toggleHidden' },
+    { key: 'toggleStar' },
+    { key: 'toggleVisible' },
+    { key: 'toggleAutoTear' },
+    { key: 'switchMode' }
   ];
 
   function el(tag, cls, text) {
@@ -42,10 +42,12 @@
       this.app = app;
       this.el = el('div', 'settings-panel hidden');
       this.host.appendChild(this.el);
-      this.tab = 'look';
+      this.tab = 'general';
       this.dicts = [];
       this.docs = [];
       this.shortcuts = null;
+      // 开机自启动状态由主进程现读系统启动项，不存盘（见 main/auto-launch.js）
+      this.autoLaunch = null;
       this.recording = null;
       this._onKey = this._onKey.bind(this);
       this.itemDraft = '';
@@ -62,7 +64,7 @@
     }
 
     async open(tab) {
-      if (tab) this.tab = tab;
+      if (tab) this.tab = TAB_ALIAS[tab] || tab;
       this.el.classList.remove('hidden');
       // 窗口向右扩展，避免面板遮住桌宠
       try {
@@ -106,6 +108,11 @@
         this.shortcuts = await NS.call(window.petAPI.shortcutGetAll());
       } catch {
         this.shortcuts = null;
+      }
+      try {
+        this.autoLaunch = await NS.call(window.petAPI.autoLaunchStatus());
+      } catch {
+        this.autoLaunch = null;
       }
     }
 
@@ -195,6 +202,12 @@
       return el('div', 'sp-hint', text);
     }
 
+    /** 是否显示「（12）」这类**数量**括号（设置 → 全局 可关；「（导入）」这类状态标记不受影响） */
+    _countsOn() {
+      const s = this.store.get('settings') || {};
+      return s.showCounts !== false;
+    }
+
     /* ---------------- 渲染 ---------------- */
 
     render() {
@@ -205,7 +218,7 @@
       this.el.innerHTML = '';
 
       const head = el('div', 'sp-head');
-      head.appendChild(el('span', null, '设置中心'));
+      head.appendChild(el('span', null, t('settings.title')));
       const acts = el('div', 'sp-actions');
       const close = el('span', 'sp-close', '✕');
       close.addEventListener('click', () => this.close());
@@ -215,10 +228,10 @@
       this._attachHeadDrag(head);
 
       const tabs = el('div', 'sp-tabs');
-      for (const t of TABS) {
-        const b = el('div', `sp-tab${this.tab === t.key ? ' active' : ''}`, t.label);
+      for (const tab of TABS) {
+        const b = el('div', `sp-tab${this.tab === tab.key ? ' active' : ''}`, t(`settings.tab.${tab.key}`));
         b.addEventListener('click', () => {
-          this.tab = t.key;
+          this.tab = tab.key;
           this.render();
         });
         tabs.appendChild(b);
@@ -228,7 +241,7 @@
       const body = el('div', 'sp-body');
       this.el.appendChild(body);
 
-      if (this.tab === 'look') this._renderLook(body, s);
+      if (this.tab === 'general') this._renderGeneral(body, s);
       else if (this.tab === 'tear') this._renderTear(body, s);
       else if (this.tab === 'mode') this._renderMode(body, s);
       else if (this.tab === 'keys') this._renderKeys(body, s);
@@ -287,125 +300,199 @@
       head.addEventListener('pointercancel', end);
     }
 
-    _renderLook(body, s) {
-      const sec = this._sec('尺寸（统一由缩放驱动）');
+    /* ---------------- 通用（语言 / 纸张与文字 / 界面细节 / 启动 / 说明） ----------------
+       以前「外观」单开一页，实际只有四五个滑杆，来回切页比改设置还费事；
+       现在一页从上往下就是「先看语言 → 再调外观 → 最后启动」，一屏基本够。 */
+
+    _renderGeneral(body, s) {
+      const st = s || this.store.get('settings') || {};
+
+      /* 语言：放最上面。它是唯一「改完整个界面都变」的开关，翻到底才能找到不合理 */
+      const langSec = this._sec(t('settings.general.langSection'));
+      const langRow = el('div', 'sp-row');
+      langRow.appendChild(el('label', null, t('settings.general.uiLang')));
+      const langOptions = NS.I18N.OPTIONS.map((code) => ({
+        value: code,
+        label: NS.I18N.localeName(code)
+      }));
+      const curPref = st.locale || 'auto';
+      const langSel = this._select(langOptions, curPref, (v) => this.app.setLocale(v));
+      langSel.classList.add('grow');
+      langRow.appendChild(langSel);
+      langSec.appendChild(langRow);
+      langSec.appendChild(this._hint(t('settings.general.langHint')));
+      body.appendChild(langSec);
+
+      /* 纸张与文字：原「外观」页的尺寸/阅读两块 */
+      const sec = this._sec(t('settings.appearance.title'));
       sec.appendChild(
-        this._slider('纸张高度', {
+        this._slider(t('settings.appearance.paperHeight'), {
           min: 120,
           max: 400,
           step: 10,
-          value: s.basePaperHeightPx,
+          value: st.basePaperHeightPx,
           fmt: (v) => `${v}px`,
           onChange: (v) => this.app.applySettings({ basePaperHeightPx: v })
         })
       );
       sec.appendChild(
-        this._slider('整体缩放', {
+        this._slider(t('settings.appearance.scale'), {
           min: 0.5,
           max: 2,
           step: 0.05,
-          value: s.scale,
+          value: st.scale,
           fmt: (v) => `${Math.round(v * 100)}%`,
           onChange: (v) => this.app.applyScale(v)
         })
       );
       sec.appendChild(
-        this._hint('纸宽 = 基准 170px × 缩放比例，横向同步等比变化；缩放角可在下方关闭。')
-      );
-      body.appendChild(sec);
-
-      const sec2 = this._sec('阅读');
-      sec2.appendChild(
-        this._slider('正文字号', {
+        this._slider(t('settings.appearance.fontSize'), {
           min: 10,
           max: 30,
           step: 1,
-          value: s.fontSizePx,
+          value: st.fontSizePx,
           fmt: (v) => `${v}px`,
           onChange: (v) => this.app.applySettings({ fontSizePx: v })
         })
       );
-      sec2.appendChild(
-        this._switchRow('黑夜模式', s.darkMode, (v) => this.app.applySettings({ darkMode: v }))
+      sec.appendChild(
+        this._switchRow(t('settings.appearance.darkMode'), st.darkMode, (v) =>
+          this.app.applySettings({ darkMode: v })
+        )
       );
-      sec2.appendChild(
-        this._switchRow('左上角缩放角', s.scaleCornerEnabled, (v) =>
+      sec.appendChild(
+        this._switchRow(t('settings.appearance.corner'), st.scaleCornerEnabled, (v) =>
           this.app.applySettings({ scaleCornerEnabled: v })
         )
       );
-      body.appendChild(sec2);
+      sec.appendChild(this._hint(t('settings.appearance.hint')));
+      body.appendChild(sec);
+
+      /* 界面细节：和具体模式无关的小开关 */
+      const viewSec = this._sec(t('settings.display.title'));
+      viewSec.appendChild(
+        this._switchRow(t('settings.display.counts'), st.showCounts !== false, (v) =>
+          this.app.applySettings({ showCounts: v })
+        )
+      );
+      viewSec.appendChild(this._hint(t('settings.display.countsHint')));
+      body.appendChild(viewSec);
+
+      /* 启动：只留开关 + 一句「换位置自动跟着改」。
+         状态看开关本身，写进系统的命令、各种「已开启 / 已关闭」的解释都不再占地方。 */
+      const al = this.autoLaunch;
+      const supported = !al || al.supported !== false;
+      const startSec = this._sec(t('settings.start.title'));
+
+      const row = el('div', 'sp-row');
+      row.appendChild(el('label', null, t('settings.start.autoLaunch')));
+      const sp = el('div', `switch${al && al.enabled ? ' on' : ''}${supported ? '' : ' disabled'}`);
+      row.appendChild(sp);
+      startSec.appendChild(row);
+
+      // 唯一保留的说明：程序换位置时启动项会自动改写（v2.4 起的行为，不写一句没人知道）
+      startSec.appendChild(this._hint(t('settings.start.pathHint')));
+      // 系统不支持时开关是死的，得说一句，否则「点了没反应」像坏了（只在非 Windows 环境出现）
+      if (!supported) {
+        startSec.appendChild(this._hint((al && al.reason) || t('settings.start.unsupported')));
+      }
+
+      sp.addEventListener('click', async () => {
+        if (!supported || sp.classList.contains('busy')) return;
+        const next = !sp.classList.contains('on');
+        sp.classList.add('busy');
+        sp.classList.toggle('on', next); // 先动一下手，等主进程回读后再以真实状态回填
+        try {
+          const status = await this.app.setAutoLaunch(next);
+          this.autoLaunch = status || this.autoLaunch;
+          this.render(); // 重建本页：被系统关掉时要补出「去放行」按钮
+        } catch (err) {
+          sp.classList.remove('busy');
+          sp.classList.toggle('on', !next);
+          this.app.toast.error(NS.errorText(err));
+        }
+      });
+
+      if (al && al.supported !== false && al.blocked) {
+        const btnRow = el('div', 'sp-row');
+        btnRow.appendChild(
+          this._btn(t('settings.start.openSystem'), () => this.app.openStartupSettings(), 'ghost')
+        );
+        startSec.appendChild(btnRow);
+      }
+      body.appendChild(startSec);
+
+      const guideSec = this._sec(t('settings.guide.title'));
+      guideSec.appendChild(this._btn(t('settings.guide.open'), () => this.app.showGuide(), 'ghost'));
+      guideSec.appendChild(this._hint(t('settings.guide.hint')));
+      body.appendChild(guideSec);
+    }
+
+    /** v3 之前的老名字：外部若还调 _renderGlobal 也不会崩 */
+    _renderGlobal(body, s) {
+      this._renderGeneral(body, s);
     }
 
     _renderTear(body, s) {
-      const sec = this._sec('撕纸');
+      const sec = this._sec(t('settings.tear.title'));
       sec.appendChild(
-        this._slider('撕纸阈值', {
+        this._slider(t('settings.tear.threshold'), {
           min: 0.5,
           max: 6,
           step: 0.5,
           value: s.tearThresholdPages,
-          fmt: (v) => `${v} 张`,
+          fmt: (v) => `${v} ${t('unit.sheets')}`,
           onChange: (v) => this.app.applySettings({ tearThresholdPages: v })
         })
       );
+      sec.appendChild(this._hint(t('settings.tear.thresholdHint')));
       sec.appendChild(
-        this._hint('拉出这么多张之后松手才会撕纸；不到这个量松手就停在原地，不会回弹。拖动过程中一张都不撕，全留到松手时结算。')
-      );
-      sec.appendChild(
-        this._slider('回溯上限', {
+        this._slider(t('settings.tear.maxBacktrack'), {
           min: 1,
           max: 50,
           step: 1,
           value: s.maxBacktrack,
-          fmt: (v) => `${v} 张`,
+          fmt: (v) => `${v} ${t('unit.sheets')}`,
           onChange: (v) => this.app.applySettings({ maxBacktrack: v })
         })
       );
+      sec.appendChild(this._hint(t('settings.tear.maxBacktrackHint')));
       sec.appendChild(
-        this._hint(
-          `硬上限 50 张。当前可回溯 ${this.app.stack ? this.app.stack.size : 0} 张；超出上限后最早的纸不可恢复并会提示。`
-        )
-      );
-      sec.appendChild(
-        this._hint('纸带可以无限下拉：整张滑出视口、完全看不见的纸会在松手时静默撕掉并记入回溯栈。')
-      );
-      sec.appendChild(
-        this._switchRow('启动时提示回溯上限', s.notifyBacktrackLimit !== false, (v) =>
+        this._switchRow(t('settings.tear.notifyLimit'), s.notifyBacktrackLimit !== false, (v) =>
           this.app.applySettings({ notifyBacktrackLimit: v })
         )
       );
-      sec.appendChild(
-        this._hint('回溯只对「本次运行」撕下的纸有效；重启后栈清空，不会回溯到上次启动前的内容。')
-      );
       body.appendChild(sec);
 
-      const sec2 = this._sec('自动滚落');
+      const sec2 = this._sec(t('settings.tear.autoTitle'));
       sec2.appendChild(
-        this._switchRow('开启自动滚落', !!(s.autoTear && s.autoTear.enabled), (v) =>
+        this._switchRow(t('settings.tear.autoEnable'), !!(s.autoTear && s.autoTear.enabled), (v) =>
           this.app.setAutoTear(v)
         )
       );
       sec2.appendChild(
-        this._slider('速度', {
+        this._slider(t('settings.tear.autoSpeed'), {
           min: 2,
           max: 120,
           step: 1,
           value: Math.round((s.autoTear && s.autoTear.pxPerSec) || 20),
-          fmt: (v) => `${v} px/秒`,
+          fmt: (v) => `${v} ${t('unit.pxPerSec')}`,
           onChange: (v) => this.app.setAutoTearSpeed(v)
         })
       );
-      sec2.appendChild(
-        this._hint('纸带按设定速度持续向下滚落，每满一张自动撕掉并计入回溯栈。')
-      );
+      sec2.appendChild(this._hint(t('settings.tear.autoHint')));
       body.appendChild(sec2);
     }
 
     _renderMode(body, s) {
-      const sec = this._sec('当前模式');
+      const sec = this._sec(t('settings.mode.title'));
       const row = el('div', 'sp-row');
       for (const m of NS.MODES) {
-        const b = this._btn(NS.MODE_LABEL[m], () => this.app.switchMode(m), s.currentMode === m ? 'primary' : '');
+        const b = this._btn(
+          NS.modeLabel(m),
+          () => this.app.switchMode(m),
+          s.currentMode === m ? 'primary' : ''
+        );
         b.style.marginRight = '4px';
         row.appendChild(b);
       }
@@ -419,28 +506,35 @@
 
     _renderLearn(body, s) {
       const learn = this.store.get('learn');
-      const sec = this._sec('学习模式');
+      const sec = this._sec(t('settings.learn.title'));
       const dictOptions = this.dicts.map((d) => ({
         value: d.id,
-        label: `${d.name}${d.builtin ? '' : '（导入）'} · ${d.count}`
+        label: `${NS.I18N.dictName(d.name)}${d.builtin ? '' : t('settings.learn.importedTag')}${
+          this._countsOn() ? ` · ${d.count}` : ''
+        }`
       }));
-      if (!dictOptions.length) dictOptions.push({ value: '', label: '没有可用词库' });
+      if (!dictOptions.length) dictOptions.push({ value: '', label: t('settings.learn.noDict') });
       const curMeta = (this.dicts || []).find((d) => d.id === learn.currentDictId);
       const dictNodes = [this._select(dictOptions, learn.currentDictId, (v) => this.app.switchDict(v))];
       if (curMeta && !curMeta.builtin) {
-        dictNodes.push(this._btn('删除', () => this.app.removeDict(curMeta.id), 'sm danger'));
+        dictNodes.push(this._btn(t('common.delete'), () => this.app.removeDict(curMeta.id), 'sm danger'));
       }
-      const dictRow = this._row('词库', dictNodes);
+      const dictRow = this._row(t('settings.learn.dict'), dictNodes);
       dictNodes[0].classList.add('grow');
       sec.appendChild(dictRow);
       const btnRow = el('div', 'sp-row');
-      btnRow.appendChild(this._btn('导入词库…', () => this.app.importDict(), 'ghost'));
-      btnRow.appendChild(this._btn('重置进度…', () => this.app.resetLearnProgress(), 'ghost'));
+      btnRow.appendChild(this._btn(t('settings.learn.importDict'), () => this.app.importDict(), 'ghost'));
+      btnRow.appendChild(
+        this._btn(t('settings.learn.resetProgress'), () => this.app.resetLearnProgress(), 'ghost')
+      );
       sec.appendChild(btnRow);
-      sec.appendChild(this._hint('只回到第一张纸，标星词与不显示词都会保留。'));
-      sec.appendChild(this._switchRow('打乱模式（每轮重洗）', !!learn.shuffle, (v) => this.app.setLearnOption('shuffle', v)));
       sec.appendChild(
-        this._switchRow('隐藏释义（单击纸显示）', !!learn.hideDefinition, (v) =>
+        this._switchRow(t('settings.learn.shuffle'), !!learn.shuffle, (v) =>
+          this.app.setLearnOption('shuffle', v)
+        )
+      );
+      sec.appendChild(
+        this._switchRow(t('settings.learn.hideDef'), !!learn.hideDefinition, (v) =>
           this.app.setLearnOption('hideDefinition', v)
         )
       );
@@ -450,6 +544,7 @@
          会连纸带一起重建，手感很跳；刷新只重绘、不动纸张进度。 */
       let langSec = null;
       if (curMeta) {
+        // ⚠️ 这些中文名是**数据键**（词库 meta 里就这么存），界面只翻译显示，见 NS.I18N.langName()
         const LANG_CHOICES = ['英语', '中文', '日语', '韩语', '俄语', '法语', '德语', '西班牙语'];
         const curWord = curMeta.wordLang || '';
         const curDef = curMeta.defLang || '';
@@ -468,15 +563,17 @@
           pendDef = ALL.find((v) => v !== pendWord) || '';
         }
 
-        langSec = this._sec(`语言${curMeta.langOverridden ? '（已手改）' : ''}`);
+        langSec = this._sec(
+          `${t('settings.learn.langTitle')}${curMeta.langOverridden ? t('settings.learn.langEdited') : ''}`
+        );
 
         const stateEl = el('span', 'sp-lang-state', '');
         const refreshBtn = this._btn(
-          '刷新纸面',
+          t('settings.learn.refresh'),
           () => {
             if (refreshBtn.disabled) return;
             refreshBtn.disabled = true;
-            stateEl.textContent = '正在刷新…';
+            stateEl.textContent = t('settings.learn.refreshing');
             stateEl.classList.remove('dirty');
             this.app
               .applyDictLang(learn.currentDictId, pendWord, pendDef)
@@ -484,15 +581,15 @@
                 // 有改动时面板会整体重建，旧节点已失效，反馈交给 toast
                 if (!stateEl.isConnected) return;
                 if (ok) {
-                  stateEl.textContent = '已应用，进度保持';
+                  stateEl.textContent = t('settings.learn.refreshed');
                   stateEl.classList.remove('dirty');
                 } else {
-                  stateEl.textContent = '刷新失败，请重试';
+                  stateEl.textContent = t('settings.learn.refreshFailed');
                   stateEl.classList.add('dirty');
                 }
               })
               .catch(() => {
-                if (stateEl.isConnected) stateEl.textContent = '刷新失败，请重试';
+                if (stateEl.isConnected) stateEl.textContent = t('settings.learn.refreshFailed');
               })
               .finally(() => {
                 refreshBtn.disabled = false;
@@ -502,7 +599,7 @@
         );
         const markDirty = () => {
           const changed = pendWord !== curWord || pendDef !== curDef;
-          stateEl.textContent = changed ? '有改动，点刷新生效' : '';
+          stateEl.textContent = changed ? t('settings.learn.dirty') : '';
           stateEl.classList.toggle('dirty', changed);
         };
 
@@ -513,7 +610,9 @@
         const optionsFor = (exclude) =>
           ALL.filter((v) => v !== exclude).map((v) => ({
             v,
-            label: hasContent(v) ? v : `${v}（无内容）`
+            label: hasContent(v)
+              ? NS.I18N.langName(v)
+              : `${NS.I18N.langName(v)}${t('settings.learn.noContentTag')}`
           }));
         const fillSel = (sel, list, val) => {
           sel.innerHTML = '';
@@ -531,8 +630,8 @@
         const defSel = document.createElement('select');
         const refreshSel = () => {
           const pair = ALL.length >= 2;
-          fillSel(wordSel, pair ? optionsFor(pendDef) : ALL.map((v) => ({ v, label: v })), pendWord);
-          fillSel(defSel, pair ? optionsFor(pendWord) : ALL.map((v) => ({ v, label: v })), pendDef);
+          fillSel(wordSel, pair ? optionsFor(pendDef) : ALL.map((v) => ({ v, label: NS.I18N.langName(v) })), pendWord);
+          fillSel(defSel, pair ? optionsFor(pendWord) : ALL.map((v) => ({ v, label: NS.I18N.langName(v) })), pendDef);
           if (refreshEmpty) refreshEmpty();
         };
         let refreshEmpty = null;
@@ -559,8 +658,8 @@
            否则连点两次会让两次写盘交错、上下又变回原样。 */
         let swapBusy = false;
         const swapBtn = this._btn('⇄', null, 'swap sp-lang-swap');
-        swapBtn.title = '交换上下（点一下立即生效，进度保留）';
-        swapBtn.setAttribute('aria-label', '交换学习语言与释义语言');
+        swapBtn.title = t('settings.learn.swap');
+        swapBtn.setAttribute('aria-label', t('settings.learn.swapAria'));
         swapBtn.disabled = ALL.length < 2;
         swapBtn.addEventListener('click', async () => {
           if (swapBusy || swapBtn.disabled) return;
@@ -573,19 +672,24 @@
           markDirty();
           swapBusy = true;
           swapBtn.disabled = true;
-          stateEl.textContent = '正在交换…';
+          stateEl.textContent = t('settings.learn.swapping');
           stateEl.classList.remove('dirty');
           try {
             // silent：成功提示由这里统一给，避免「已改为 / 已对调」两条 toast 打架
             const ok = await this.app.applyDictLang(learn.currentDictId, w, d, { silent: true });
-            if (ok) this.app.toast.info(`已对调：上「${w}」下「${d}」`);
+            if (ok)
+              this.app.toast.info(
+                t('settings.learn.swapped', { w: NS.I18N.langName(w), d: NS.I18N.langName(d) })
+              );
             // 有改动时面板会整体重建，旧节点失效，反馈交给 toast
             if (!stateEl.isConnected) return;
-            stateEl.textContent = ok ? `已交换：上「${w}」下「${d}」` : '交换失败，请重试';
+            stateEl.textContent = ok
+              ? t('settings.learn.swapped', { w: NS.I18N.langName(w), d: NS.I18N.langName(d) })
+              : t('settings.learn.swapFailed');
             stateEl.classList.toggle('dirty', !ok);
           } catch {
             if (stateEl.isConnected) {
-              stateEl.textContent = '交换失败，请重试';
+              stateEl.textContent = t('settings.learn.swapFailed');
               stateEl.classList.add('dirty');
             }
           } finally {
@@ -595,18 +699,20 @@
         });
 
         const langRow = el('div', 'sp-lang-row');
-        langRow.appendChild(this._langCell('学习语言（上）', wordSel));
+        langRow.appendChild(this._langCell(t('settings.learn.wordLang'), wordSel));
         langRow.appendChild(swapBtn);
-        langRow.appendChild(this._langCell('释义语言（下）', defSel));
+        langRow.appendChild(this._langCell(t('settings.learn.defLang'), defSel));
         langSec.appendChild(langRow);
 
         // 选了词库里没有的语言时明说一句，否则纸面看起来「换了没反应」
         const emptyEl = el('div', 'sp-hint sp-lang-empty', '');
         refreshEmpty = () => {
           const miss = [];
-          if (pendWord && !hasContent(pendWord)) miss.push(`上方「${pendWord}」`);
-          if (pendDef && !hasContent(pendDef)) miss.push(`下方「${pendDef}」`);
-          emptyEl.textContent = miss.length ? `${miss.join('、')}在这本词库里没有内容，该行会回落原文。` : '';
+          if (pendWord && !hasContent(pendWord)) miss.push(NS.I18N.langName(pendWord));
+          if (pendDef && !hasContent(pendDef)) miss.push(NS.I18N.langName(pendDef));
+          emptyEl.textContent = miss.length
+            ? t('settings.learn.noContentHint', { langs: miss.join(' / ') })
+            : '';
         };
         refreshEmpty();
         langSec.appendChild(emptyEl);
@@ -615,59 +721,42 @@
         acts.appendChild(refreshBtn);
         acts.appendChild(stateEl);
         langSec.appendChild(acts);
-
-        langSec.appendChild(
-          this._hint(
-            '上方取「学习语言」的内容，下方取「释义语言」的内容；两种语言不能相同，所以对调后纸面上下就真的互换了。'
-          )
-        );
-        langSec.appendChild(
-          this._hint('下拉之间的小「⇄」是对调按钮：点一下就把上下互换并立即生效，进度不动。')
-        );
-        langSec.appendChild(
-          this._hint('「标星 / 不显示」跟着学习语言分组保存，同一语言的不同词库共用一份。')
-        );
-        langSec.appendChild(
-          this._hint(
-            dictLangs.length > 2
-              ? `该词库有 ${dictLangs.join(' / ')}（共 ${dictLangs.length} 种）可放到上下两行；某一行没有该语言时回落原文。`
-              : `该词库只有 ${dictLangs.join(' / ') || '两种'} 两种语言；导入带多语言内容的词表（如「apple - n.苹果 / りんご」）后可自由配对。`
-          )
-        );
-        langSec.appendChild(
-          this._hint('语言名（含「其他1 / 其他2」）在导入时确定；要改名请重新导入该词表。')
-        );
       }
       body.appendChild(sec);
       if (langSec) body.appendChild(langSec);
 
       /* 词库管理：导入的词库以前只能去 userData/dicts/ 手删，这里给个入口 */
       const imported = (this.dicts || []).filter((d) => !d.builtin);
-      const mgmtSec = this._sec(`词库管理（导入 ${imported.length}）`);
+      const mgmtSec = this._sec(
+        this._countsOn()
+          ? t('settings.learn.mgmtCount', { n: imported.length })
+          : t('settings.learn.mgmt')
+      );
       if (!imported.length) {
-        mgmtSec.appendChild(this._hint('暂无导入词库；内置词库不可删除。'));
+        mgmtSec.appendChild(this._hint(t('settings.learn.mgmtEmpty')));
       } else {
         const box = el('div', 'sp-list');
         for (const d of imported) {
           const item = el('div', 'sp-list-item');
           const isCur = d.id === learn.currentDictId;
-          const name = el('span', 'ell', `${d.name} · ${d.count} 条`);
-          name.title = `${d.name} · ${d.count} 条${d.wordLang ? ` · ${d.wordLang}` : ''}${isCur ? ' · 当前使用' : ''}`;
+          const dn = NS.I18N.dictName(d.name);
+          const line = t('settings.learn.countLine', { name: dn, n: d.count });
+          const name = el('span', 'ell', line);
+          name.title = `${line}${d.wordLang ? ` · ${NS.I18N.langName(d.wordLang)}` : ''}${
+            isCur ? ` · ${t('settings.learn.inUse')}` : ''
+          }`;
           item.appendChild(name);
           if (isCur) {
-            const tag = el('span', null, '使用中');
+            const tag = el('span', null, t('settings.learn.inUse'));
             tag.style.fontSize = '10px';
             tag.style.color = 'var(--ink-mute)';
             tag.style.flex = '0 0 auto';
             item.appendChild(tag);
           }
-          item.appendChild(this._btn('删除', () => this.app.removeDict(d.id), 'sm danger'));
+          item.appendChild(this._btn(t('common.delete'), () => this.app.removeDict(d.id), 'sm danger'));
           box.appendChild(item);
         }
         mgmtSec.appendChild(box);
-        mgmtSec.appendChild(
-          this._hint('删除当前词库会自动切回内置词库；标星词与不显示词按语言保存，不会一起删掉。')
-        );
       }
       body.appendChild(mgmtSec);
 
@@ -676,7 +765,8 @@
       const lp = this.app.providers.learn;
       const curDict = (this.dicts || []).find((d) => d.id === learn.currentDictId);
       const lang = (curDict && curDict.lang) || lp.lang || 'unknown';
-      const langName = (curDict && curDict.wordLang) || lp.langLabel || '未标注语言';
+      const langRaw = (curDict && curDict.wordLang) || lp.langLabel || '';
+      const langName = langRaw ? NS.I18N.langName(langRaw) : t('settings.learn.unknownLang');
       const group = (map) =>
         map && !Array.isArray(map) && Array.isArray(map[lang]) ? map[lang] : [];
       const otherCount = (map) => {
@@ -701,32 +791,47 @@
       });
 
       const hiddenSplit = splitByDict(group(learn.hidden));
-      const listSec = this._sec(`不显示词（${hiddenSplit.here.length} · ${langName}）`);
-      listSec.appendChild(this._hint(`仅对「${langName}」词库生效；同一语言的不同词库共用这一份。`));
+      const hiddenTitle = this._countsOn()
+        ? t('settings.learn.hiddenTitleCount', { n: hiddenSplit.here.length, lang: langName })
+        : `${t('settings.learn.hiddenTitle')} · ${langName}`;
+      const listSec = this._sec(hiddenTitle);
       listSec.appendChild(
-        this._foldList(hiddenSplit.here, '显示', (w) => this.app.toggleHidden(w), '个不显示词')
+        this._foldList(
+          hiddenSplit.here,
+          t('settings.learn.show'),
+          (w) => this.app.toggleHidden(w),
+          t('unit.hiddenWord')
+        )
       );
       if (hiddenSplit.stale.length) {
         listSec.appendChild(
-          this._hint(`另有 ${hiddenSplit.stale.length} 个词不在当前词库（切到包含它们的词库时仍然生效）。`)
+          this._hint(t('settings.learn.staleNote', { n: hiddenSplit.stale.length }))
         );
       }
       const hiddenOther = otherCount(learn.hidden);
-      if (hiddenOther) listSec.appendChild(this._hint(`其他语言另有 ${hiddenOther} 条，切换过去才会显示。`));
+      if (hiddenOther) listSec.appendChild(this._hint(t('settings.learn.otherLangNote', { n: hiddenOther })));
       body.appendChild(listSec);
 
       const starSplit = splitByDict(group(learn.starred));
-      const starSec = this._sec(`标星词（${starSplit.here.length} · ${langName}）`);
+      const starTitle = this._countsOn()
+        ? t('settings.learn.starredTitleCount', { n: starSplit.here.length, lang: langName })
+        : `${t('settings.learn.starredTitle')} · ${langName}`;
+      const starSec = this._sec(starTitle);
       starSec.appendChild(
-        this._foldList(starSplit.here, '取消标星', (w) => this.app.toggleStar(w), '个标星词')
+        this._foldList(
+          starSplit.here,
+          t('settings.learn.unstar'),
+          (w) => this.app.toggleStar(w),
+          t('unit.starredWord')
+        )
       );
       if (starSplit.stale.length) {
         starSec.appendChild(
-          this._hint(`另有 ${starSplit.stale.length} 个词不在当前词库（切到包含它们的词库时仍然生效）。`)
+          this._hint(t('settings.learn.staleNote', { n: starSplit.stale.length }))
         );
       }
       const starOther = otherCount(learn.starred);
-      if (starOther) starSec.appendChild(this._hint(`其他语言另有 ${starOther} 条，切换过去才会显示。`));
+      if (starOther) starSec.appendChild(this._hint(t('settings.learn.otherLangNote', { n: starOther })));
       body.appendChild(starSec);
     }
 
@@ -736,7 +841,13 @@
       const head = el('div', 'sp-fold-head');
       head.appendChild(el('span', 'sp-fold-arrow'));
       head.appendChild(
-        el('span', 'ell', words.length ? `展开查看 ${words.length} ${unit || '项'}` : '暂无')
+        el(
+          'span',
+          'ell',
+          words.length
+            ? t('common.expandCount', { n: words.length, unit: unit || '' }).trim()
+            : t('common.none')
+        )
       );
       wrap.appendChild(head);
       const body = el('div', 'sp-fold-body collapsed');
@@ -755,7 +866,7 @@
     _wordList(words, btnLabel, onClick) {
       const box = el('div', 'sp-list');
       if (!words.length) {
-        box.appendChild(el('div', 'sp-empty', '暂无'));
+        box.appendChild(el('div', 'sp-empty', t('common.none')));
         return box;
       }
       for (const w of words.slice(0, 200)) {
@@ -765,30 +876,34 @@
         item.appendChild(b);
         box.appendChild(item);
       }
-      if (words.length > 200) box.appendChild(el('div', 'sp-empty', `还有 ${words.length - 200} 个…`));
+      if (words.length > 200)
+        box.appendChild(el('div', 'sp-empty', t('common.more', { n: words.length - 200 })));
       return box;
     }
 
     _renderLeisure(body, s) {
       const leisure = this.store.get('leisure');
-      const sec = this._sec('休闲资料');
-      sec.appendChild(this._btn('导入资料（docx / md / txt / pdf）…', () => this.app.importDoc(), 'ghost'));
-      sec.appendChild(this._hint('导入后按内容确定性分页，进度以字符偏移量记录，任何设置变化都不会丢失。'));
+      const sec = this._sec(t('settings.leisure.docs'));
+      sec.appendChild(this._btn(t('settings.leisure.importDoc'), () => this.app.importDoc(), 'ghost'));
       body.appendChild(sec);
 
-      const listSec = this._sec(`资料库（${this.docs.length}）`);
+      const listSec = this._sec(
+        this._countsOn()
+          ? t('settings.leisure.docsCount', { n: this.docs.length })
+          : t('settings.leisure.docs')
+      );
       const box = el('div', 'sp-list');
       if (!this.docs.length) {
-        box.appendChild(el('div', 'sp-empty', '还没有导入资料'));
+        box.appendChild(el('div', 'sp-empty', t('settings.leisure.empty')));
       } else {
         for (const d of this.docs) {
           const item = el('div', `sp-list-item${leisure.activeDocId === d.docId ? ' active' : ''}`);
           const name = el('span', 'ell', d.name);
-          name.title = `${d.name} · ${d.blockCount} 段`;
+          name.title = `${d.name} · ${t('settings.leisure.blocks', { n: d.blockCount })}`;
           name.style.cursor = 'pointer';
           name.addEventListener('click', () => this.app.openDoc(d.docId));
           item.appendChild(name);
-          item.appendChild(this._btn('删除', () => this.app.removeDoc(d.docId), 'sm danger'));
+          item.appendChild(this._btn(t('common.delete'), () => this.app.removeDoc(d.docId), 'sm danger'));
           box.appendChild(item);
         }
       }
@@ -798,54 +913,116 @@
 
     _renderChecklist(body, s) {
       const cl = this.store.get('checklists');
-      const sec = this._sec('清单');
-      const listOptions = (cl.lists || []).map((l) => ({ value: l.id, label: `${l.name}（${l.items.length}）` }));
-      if (!listOptions.length) listOptions.push({ value: '', label: '没有清单' });
+      const sec = this._sec(t('settings.cl.title'));
+      const listOptions = (cl.lists || []).map((l) => ({
+        value: l.id,
+        label: this._countsOn() ? `${l.name}（${l.items.length}）` : l.name
+      }));
+      if (!listOptions.length) listOptions.push({ value: '', label: t('settings.cl.noList') });
       sec.appendChild(
-        this._row('切换', [this._select(listOptions, cl.activeListId, (v) => this.app.selectList(v))])
+        this._row(t('settings.cl.switch'), [this._select(listOptions, cl.activeListId, (v) => this.app.selectList(v))])
       );
       const rowBtn = el('div', 'sp-row');
-      rowBtn.appendChild(this._btn('新建', () => this.app.createList(), 'ghost'));
-      rowBtn.appendChild(this._btn('重命名', () => this.app.renameList(), 'ghost'));
-      rowBtn.appendChild(this._btn('删除', () => this.app.removeList(), 'ghost danger'));
+      rowBtn.appendChild(this._btn(t('settings.cl.new'), () => this.app.createList(), 'ghost'));
+      rowBtn.appendChild(this._btn(t('settings.cl.rename'), () => this.app.renameList(), 'ghost'));
+      rowBtn.appendChild(
+        this._btn(t('settings.cl.delete'), () => this.app.removeList(), 'ghost danger')
+      );
       sec.appendChild(rowBtn);
+      // 清单备份（v2.9 从右键菜单挪进来，摆在清单模式自己的设置里）
+      const ioRow = el('div', 'sp-row');
+      ioRow.appendChild(this._btn(t('settings.cl.export'), () => this.app.exportChecklists(), 'ghost'));
+      ioRow.appendChild(this._btn(t('settings.cl.import'), () => this.app.importChecklists(), 'ghost'));
+      sec.appendChild(ioRow);
       const noTear = s.checklistNoTear !== false;
       sec.appendChild(
-        this._switchRow('不撕纸', noTear, (v) => this.app.setChecklistNoTear(v))
+        this._switchRow(t('settings.cl.noTear'), noTear, (v) => this.app.setChecklistNoTear(v))
       );
       sec.appendChild(
-        this._hint(
-          noTear
-            ? '清单的每一页只是同一个清单的分页视图：下拉/滚轮只是往下浏览，松手对齐到整页，往上滚就能回到第一页。'
-            : '关掉后和单词模式一样：拉出超过「撕纸阈值」就撕掉一张（可在「手势」里调阈值），撕下来的能回溯。'
+        this._switchRow(t('settings.cl.loop'), s.checklistLoop !== false, (v) =>
+          this.app.setChecklistLoop(v)
         )
       );
       sec.appendChild(
-        this._switchRow('循环浏览', s.checklistLoop !== false, (v) => this.app.setChecklistLoop(v))
-      );
-      sec.appendChild(
-        this._hint(
-          noTear
-            ? '和单词模式一样：纸带无限，拉到底会接回第一页。关掉后拉到最后一张就停。'
-            : '撕纸模式下纸带不再循环（撕完又绕回来等于白撕），这条开关只在「不撕纸」时起作用。'
+        this._switchRow(t('settings.cl.numbering'), !!s.checklistNumbering, (v) =>
+          this.app.setChecklistNumbering(v)
         )
-      );
-      sec.appendChild(
-        this._switchRow('自动序号', !!s.checklistNumbering, (v) => this.app.setChecklistNumbering(v))
-      );
-      sec.appendChild(
-        this._hint('勾选后纸面按添加顺序标 1. 2. 3.：新条目接在最后，序号自动往后排；删掉中间一条，后面的序号会往前补。')
       );
       body.appendChild(sec);
 
       const active = (cl.lists || []).find((l) => l.id === cl.activeListId) || (cl.lists || [])[0];
       if (!active) return;
 
-      const itemSec = this._sec(`条目（${active.items.length}）`);
+      /* 清除：只清**在纸面上**做过的东西 —— 勾选，和右键设的加粗/颜色/划线；
+         条目文字、高级编辑里排的版、随记都不动 */
+      const items = active.items || [];
+      const doneN = items.filter((it) => NS.ChecklistOps.hasMark(it, 'done')).length;
+      const pageN = items.filter((it) => NS.ChecklistOps.hasMark(it, 'page')).length;
+      const showN = this._countsOn();
+      const clearSec = this._sec(t('settings.cl.clearTitle'));
+      const clearRow = el('div', 'sp-row');
+      const btnDone = this._btn(
+        `${t('settings.cl.clearDone')}${showN && doneN ? ` (${doneN})` : ''}`,
+        () => this.app.clearChecklistMarks('done'),
+        'ghost'
+      );
+      btnDone.disabled = !doneN;
+      const btnAll = this._btn(
+        `${t('settings.cl.clearPage')}${showN && pageN ? ` (${pageN})` : ''}`,
+        () => this.app.clearChecklistMarks('page'),
+        'ghost'
+      );
+      btnAll.disabled = !pageN;
+      clearRow.appendChild(btnDone);
+      clearRow.appendChild(btnAll);
+      clearSec.appendChild(clearRow);
+      body.appendChild(clearSec);
+
+      /* 定时清除：每天到点自动清一次，省得每天手动点 */
+      const ac = s.checklistAutoClear || {};
+      const autoSec = this._sec(t('settings.cl.autoTitle'));
+      autoSec.appendChild(
+        this._switchRow(t('settings.cl.autoEnable'), !!ac.enabled, (v) =>
+          this.app.setAutoClear({ enabled: v })
+        )
+      );
+      const timeRow = el('div', 'sp-row');
+      timeRow.appendChild(el('label', null, t('settings.cl.time')));
+      const timeInput = document.createElement('input');
+      timeInput.type = 'time';
+      timeInput.value = ac.time || '06:00';
+      timeInput.disabled = !ac.enabled;
+      timeInput.addEventListener('change', () =>
+        this.app.setAutoClear({ time: timeInput.value || '06:00' })
+      );
+      timeRow.appendChild(timeInput);
+      const scopeSel = this._select(
+        [
+          { value: 'page', label: t('settings.cl.scopePage') },
+          { value: 'done', label: t('settings.cl.scopeDone') }
+        ],
+        ac.scope === 'done' ? 'done' : 'page',
+        (v) => this.app.setAutoClear({ scope: v })
+      );
+      scopeSel.disabled = !ac.enabled;
+      // 英文/法文的选项很长：给一个可收缩的基准宽度，别把整行顶出面板
+      scopeSel.style.flex = '1 1 0';
+      scopeSel.style.width = 'auto';
+      scopeSel.style.minWidth = '0';
+      scopeSel.style.maxWidth = '100%';
+      timeRow.appendChild(scopeSel);
+      autoSec.appendChild(timeRow);
+      body.appendChild(autoSec);
+
+      const itemSec = this._sec(
+        this._countsOn()
+          ? t('settings.cl.itemsCount', { n: items.length })
+          : t('settings.cl.items')
+      );
       const addRow = el('div', 'sp-row');
       const input = document.createElement('input');
       input.type = 'text';
-      input.placeholder = '输入条目后回车添加';
+      input.placeholder = t('settings.cl.addPlaceholder');
       input.value = this.itemDraft || '';
       input.addEventListener('input', () => {
         this.itemDraft = input.value;
@@ -864,17 +1041,17 @@
       addRow.appendChild(input);
       itemSec.appendChild(addRow);
 
-      // 高级编辑：跳独立窗口，像 doc 一样排版（字号/字色/高亮/加粗），纸面按段落折行分页
+      // 排版：跳独立窗口，像 doc 一样排版（字号/字色/高亮/加粗），纸面按段落折行分页
       const richRow = el('div', 'sp-row');
-      const richBtn = this._btn('高级编辑', () => this.app.editItemRich(''), 'ghost');
+      const richBtn = this._btn(t('settings.cl.rich'), () => this.app.editItemRich(''), 'ghost');
       richBtn.style.flex = '0 0 auto';
+      richBtn.title = t('settings.cl.richNewTip');
       richRow.appendChild(richBtn);
-      richRow.appendChild(el('span', 'sp-hint', '字号 / 字色 / 突出显示 / 加粗'));
       itemSec.appendChild(richRow);
 
       const box = el('div', 'sp-list');
       if (!active.items.length) {
-        box.appendChild(el('div', 'sp-empty', '还没有条目'));
+        box.appendChild(el('div', 'sp-empty', t('settings.cl.empty')));
       }
       let dragId = null;
       for (const it of active.items) {
@@ -909,7 +1086,7 @@
         });
 
         const handle = el('span', 'sp-drag', '⋮⋮');
-        handle.title = '拖动排序';
+        handle.title = t('settings.cl.drag');
         item.appendChild(handle);
 
         const txt = el('span', 'ell', `${it.done ? '✓ ' : ''}${it.text}`);
@@ -917,11 +1094,28 @@
         if (it.done) txt.style.opacity = '0.6';
         if (it.style && it.style.color) txt.style.color = it.style.color;
         txt.style.cursor = 'text';
-        txt.title = '双击修改文字';
+        txt.title = t('settings.cl.dblclick');
         txt.addEventListener('dblclick', () => this.app.editItemText(it.id));
         item.appendChild(txt);
-        const richBtn = this._btn('Aa', () => this.app.editItemRich(it.id), 'sm');
-        richBtn.title = it.html ? '高级编辑（这条已排版）' : '高级编辑（字号/字色/高亮/加粗）';
+        const richBtn = this._btn(t('settings.cl.rich'), () => this.app.editItemRich(it.id), 'sm');
+        richBtn.title = it.html ? t('settings.cl.richDoneTip') : t('settings.cl.richTip');
+        const notes = NS.ChecklistOps.notesOf(it);
+        const noteBtn = this._btn(t('settings.cl.note'), () => this.app.editItemNote(it.id), 'sm');
+        noteBtn.textContent = notes.length
+          ? t('settings.cl.noteCount', { n: notes.length })
+          : t('settings.cl.note');
+        noteBtn.title = notes.length
+          ? notes
+              .map((n) => `[${t(`menu.noteMode.${n.mode || 'always'}`)}] ${n.text}`)
+              .join('\n')
+          : t('settings.cl.noteTip');
+        if (notes.length) noteBtn.style.opacity = '1';
+        item.appendChild(noteBtn);
+        const starBtn = this._btn('★', () => this.app.toggleItemStar(it.id), 'sm');
+        starBtn.classList.toggle('starred', !!it.starred);
+        starBtn.title = it.starred ? t('settings.cl.unstar') : t('settings.cl.star');
+        if (it.starred) starBtn.style.opacity = '1';
+        item.appendChild(starBtn);
         item.appendChild(richBtn);
         item.appendChild(this._btn('↑', () => this.app.moveItem(it.id, -1), 'sm'));
         item.appendChild(this._btn('↓', () => this.app.moveItem(it.id, 1), 'sm'));
@@ -929,28 +1123,30 @@
         box.appendChild(item);
       }
       itemSec.appendChild(box);
-      itemSec.appendChild(
-        this._hint(
-          '「Aa」打开「高级编辑」窗口（字号/字色/突出显示/加粗，写大段文字）；双击文字改成纯文本；排序即数组顺序；纸上右键可改颜色/加粗/划线/勾选。'
-        )
-      );
       body.appendChild(itemSec);
     }
 
     _renderKeys(body) {
       const map = this.shortcuts || {};
-      const sec = this._sec('核心快捷键（录键式改键，自动检测冲突）');
+      const sec = this._sec(t('settings.keys.title'));
+      sec.appendChild(this._hint(t('settings.keys.hint')));
       for (const a of ACTIONS) {
         const cur = map[a.key] || { focused: '', global: '' };
         for (const scope of ['focused', 'global']) {
           const row = el('div', 'sp-row');
-          row.appendChild(el('label', null, scope === 'focused' ? a.label : '　↳ 全局'));
-          const kbd = el('span', 'sp-kbd', cur[scope] || '未设置');
+          row.appendChild(
+            el(
+              'label',
+              null,
+              scope === 'focused' ? t(`keys.action.${a.key}`) : `　↳ ${t('settings.keys.scope.global')}`
+            )
+          );
+          const kbd = el('span', 'sp-kbd', cur[scope] || t('settings.keys.unset'));
           kbd.addEventListener('click', () => this.startRecord(a.key, scope, kbd));
           row.appendChild(kbd);
           if (scope === 'focused') {
             row.appendChild(
-              this._btn('清除', () => {
+              this._btn(t('settings.keys.clear'), () => {
                 this.app.setShortcut(a.key, '', scope).catch(() => {});
               }, 'sm')
             );
@@ -959,40 +1155,28 @@
         }
       }
       body.appendChild(sec);
-      body.appendChild(
-        this._hint(
-          '聚焦轨：桌宠窗口激活时生效，支持任意键（含单独 Shift）；全局轨：任意场景生效，必须是组合键。冲突时会提示被占用。'
-        )
-      );
     }
 
     _renderData(body) {
-      const sec = this._sec('数据目录');
+      const sec = this._sec(t('settings.data.dirTitle'));
       const info = this.app.info || {};
       const pathEl = el('div', 'sp-hint', info.userData || '');
       pathEl.style.wordBreak = 'break-all';
       pathEl.style.userSelect = 'text';
       sec.appendChild(pathEl);
-      sec.appendChild(this._btn('打开数据目录', () => this.app.openUserData(), 'ghost'));
-      sec.appendChild(this._hint('设置、进度、清单均保存在本机，不会上传；回溯栈只存在内存里，退出即清空。'));
+      sec.appendChild(this._btn(t('settings.data.open'), () => this.app.openUserData(), 'ghost'));
       body.appendChild(sec);
 
-      const resetSec = this._sec('重置');
-      resetSec.appendChild(
-        this._hint('导入的文档与词库文件不会被这两个按钮删除，需要清理时在上面的模式分区里单独删。')
-      );
+      const resetSec = this._sec(t('settings.data.resetTitle'));
       const row = el('div', 'sp-row');
-      row.appendChild(this._btn('恢复默认设置', () => this.app.resetData('settings'), 'ghost'));
-      row.appendChild(this._btn('清空全部数据', () => this.app.resetData('all'), 'ghost danger'));
-      resetSec.appendChild(row);
-      resetSec.appendChild(
-        this._hint('「恢复默认设置」只重置外观/撕纸/快捷键；「清空全部数据」会连学习进度、阅读进度、清单一起清掉。')
+      row.appendChild(
+        this._btn(t('settings.data.resetSettings'), () => this.app.resetData('settings'), 'ghost')
       );
+      row.appendChild(
+        this._btn(t('settings.data.clearAll'), () => this.app.resetData('all'), 'ghost danger')
+      );
+      resetSec.appendChild(row);
       body.appendChild(resetSec);
-
-      const sec2 = this._sec('关于');
-      sec2.appendChild(this._hint(`小纸巾 · 学习卷纸桌宠 v${info.version || '1.0.0'}`));
-      body.appendChild(sec2);
     }
 
     /* ---------------- 录键 ---------------- */
@@ -1001,7 +1185,7 @@
       this.stopRecord();
       this.recording = { action, scope, node };
       node.classList.add('recording');
-      node.textContent = '按下按键…';
+      node.textContent = t('settings.keys.recording');
       window.petAPI.shortcutCaptureHint();
       window.addEventListener('keydown', this._onKey, true);
     }
@@ -1032,7 +1216,7 @@
         .setShortcut(action, acc, scope)
         .then(() => this.refresh())
         .catch((err) => {
-          this.app.toast.warn(err.message || '快捷键设置失败');
+          this.app.toast.warn(err.message || t('toast.keys.failed'));
           this.refresh();
         });
     }

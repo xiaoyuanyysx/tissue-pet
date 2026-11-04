@@ -135,7 +135,7 @@
     applyMeta(meta) {
       this.lang = (meta && meta.lang) || 'unknown';
       // 纸面上方 = 学习语言（wordLang），纸面下方 = 释义语言（defLang）
-      this.langLabel = (meta && meta.wordLang) || '未标注语言';
+      this.langLabel = (meta && meta.wordLang) || NS.t('settings.learn.unknownLang');
       this.defLang = (meta && meta.defLang) || '';
       // 词形 / 原文释义各自的语言，固定不随手选漂移：手选日语时上方要能取到「りんご」，
       // 但 `entry.word` 永远属于英语那一栏，不能把它记到日语名下（否则上方永远换不了）
@@ -316,8 +316,8 @@
       if (!paper) {
         const msg =
           this.emptyReason === 'all-hidden'
-            ? '这个词库的词已全部设为不显示，可在设置中心恢复'
-            : '这个词库还没有内容';
+            ? NS.t('paper.learnAllHidden')
+            : NS.t('paper.learnEmpty');
         const d = document.createElement('div');
         d.className = 'empty-page';
         d.textContent = msg;
@@ -392,13 +392,13 @@
       starBtn.className = `wa-btn${paper.starred ? ' on' : ''}`;
       starBtn.dataset.act = 'star';
       starBtn.setAttribute('role', 'button');
-      starBtn.title = paper.starred ? '取消标星' : '标星（难点词）';
+      starBtn.title = paper.starred ? NS.t('tip.unstarWord') : NS.t('tip.starWord');
       starBtn.textContent = '★';
       const hideBtn = document.createElement('span');
       hideBtn.className = 'wa-btn';
       hideBtn.dataset.act = 'hide';
       hideBtn.setAttribute('role', 'button');
-      hideBtn.title = '不再显示这个词';
+      hideBtn.title = NS.t('tip.hideWord');
       hideBtn.textContent = '✕';
       acts.appendChild(starBtn);
       acts.appendChild(hideBtn);

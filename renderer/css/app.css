@@ -1,5 +1,5 @@
 /* ==========================================================
-   小纸巾 · 学习卷纸桌宠 —— 基础样式 + 主题
+   卷纸 · 学习桌宠 —— 基础样式 + 主题
    规则：卷纸 SVG 造型层结构不得改动，仅允许通过 CSS 变量参数化
    ========================================================== */
 
@@ -360,6 +360,8 @@ body {
   overflow: hidden;
   font-size: var(--def-size);
   line-height: 1.45;
+  /* 便签卡（随记）是绝对定位在纸上的浮层，需要这里当定位基准 */
+  position: relative;
 }
 .cl-title {
   font-size: 10px;
@@ -382,10 +384,24 @@ body {
   border: 1px solid var(--ink-mute);
   border-radius: 2px;
   position: relative;
+  cursor: pointer;
+}
+/* 方框本身只有 9px，很难点中：用一层透明伪元素把热区往外扩 4px（不影响排版） */
+.cl-item .cl-box::before {
+  content: '';
+  position: absolute;
+  inset: -4px;
+}
+.cl-item .cl-box:hover {
+  border-color: var(--ink);
+  background: rgba(148, 163, 184, 0.18);
 }
 /* 续页（一个条目被分页切开的后半段）：勾选框留白，避免看起来像多了一条 */
 .cl-item .cl-box.cont {
   visibility: hidden;
+}
+.cl-item.done .cl-box {
+  border-color: var(--ink);
 }
 .cl-item.done .cl-box::after {
   content: '✓';
@@ -413,6 +429,152 @@ body {
 .cl-item.deleted .cl-text {
   color: var(--ink-mute);
   font-style: italic;
+}
+
+/* ---------- 随记（备注） ---------- */
+/* 和条目正文左对齐（勾选框 9 + 间隙 4 = 13），字号由 provider 按纸面字号算好写在行内 */
+.cl-note {
+  margin-left: 13px;
+  min-width: 0;
+}
+.cl-note.always {
+  border-left: 2px solid rgba(148, 163, 184, 0.5);
+  padding-left: 5px;
+  color: var(--ink-soft);
+  opacity: 0.92;
+}
+.cl-note.always .cl-note-text {
+  font-style: italic;
+  word-break: break-word;
+  line-height: 1.45;
+}
+/* 折叠态：一行小标签（高度由 provider 写入行内，和分页算的高度一致） */
+.cl-note.chip {
+  display: flex;
+  align-items: center;
+}
+.cl-note-chip {
+  display: inline-block;
+  padding: 0 5px;
+  border: 1px dashed var(--ink-mute);
+  border-radius: 7px;
+  font-size: 0.72em;
+  line-height: 1.3;
+  color: var(--ink-mute);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.cl-note-chip:hover {
+  color: var(--ink);
+  border-color: var(--ink);
+  background: rgba(148, 163, 184, 0.16);
+}
+/* 便签卡：点开的随记全文盖在纸上，不参与排版（开合不会把纸撑破、也不跳页）。
+   v2.7 重画：告别「整张纸盖一块虚线框」—— 改成居中浮起的便签纸，
+   暖黄底 + 左侧黄色书脊，和纸面内容一眼分开。 */
+.cl-note-card {
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  top: 15%;
+  max-height: 72%;
+  z-index: 6;
+  display: none;
+  flex-direction: column;
+  background: #fff9e6;
+  color: #57431c;
+  border: 1px solid #ecd9a0;
+  border-left: 3px solid #f0b429;
+  border-radius: 8px;
+  box-shadow: 0 10px 24px rgba(122, 92, 24, 0.28);
+  font-size: 0.82em;
+  overflow: hidden;
+}
+html[data-theme='dark'] .cl-note-card {
+  background: #342d18;
+  color: #f3e7c6;
+  border-color: #5a4c22;
+  border-left-color: #d9a441;
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.5);
+}
+.cl-note-card.open {
+  display: flex;
+}
+.cl-note-card .cnc-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 3px 7px;
+  font-size: 0.78em;
+  letter-spacing: 0.06em;
+  color: #a1863f;
+  border-bottom: 1px dashed #e3cd8e;
+  flex: 0 0 auto;
+}
+html[data-theme='dark'] .cl-note-card .cnc-head {
+  color: #b89c55;
+  border-bottom-color: #4a3f1d;
+}
+.cl-note-card .cnc-x {
+  cursor: pointer;
+  padding: 0 3px;
+  font-size: 1.25em;
+  line-height: 1;
+  color: inherit;
+  opacity: 0.7;
+}
+.cl-note-card .cnc-x:hover {
+  color: var(--danger);
+  opacity: 1;
+}
+.cl-note-card .cnc-body {
+  padding: 6px 8px;
+  overflow: auto;
+  color: inherit;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+/* 悬停随记的小气泡：贴在标签下方的轻量提示条（悬停只是瞄一眼，不值得盖住半张纸） */
+.cl-note-tip {
+  position: absolute;
+  z-index: 7;
+  display: none;
+  max-width: 86%;
+  padding: 4px 8px;
+  background: #fffbeb;
+  color: #57431c;
+  border: 1px solid #ecd9a0;
+  border-radius: 6px;
+  box-shadow: 0 5px 12px rgba(122, 92, 24, 0.22);
+  font-size: 0.78em;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+  user-select: text;
+  -webkit-user-select: text;
+}
+.cl-note-tip.on {
+  display: block;
+}
+html[data-theme='dark'] .cl-note-tip {
+  background: #342d18;
+  color: #f3e7c6;
+  border-color: #5a4c22;
+  box-shadow: 0 5px 12px rgba(0, 0, 0, 0.45);
+}
+
+/* 条目星标：v2.8 挪到勾选框旁边（行内小星，跟着排版走，不再挂在右上角） */
+.cl-star {
+  flex: 0 0 auto;
+  font-size: 0.72em;
+  line-height: 1.3;
+  margin-top: 2px;
+  color: #f59e0b;
+  pointer-events: none;
 }
 
 .empty-page {
@@ -697,6 +859,7 @@ input[type='range'] {
 }
 input[type='text'],
 input[type='number'],
+input[type='time'],
 select {
   width: 100%;
   padding: 4px 6px;
@@ -707,6 +870,19 @@ select {
   font-size: 11.5px;
   font-family: inherit;
   outline: none;
+}
+input[type='time'] {
+  /* 时间框自带日历/时钟按钮，别让它撑满整行；配合「范围」下拉并排 */
+  flex: 0 0 auto;
+  width: auto;
+  min-width: 92px;
+  cursor: pointer;
+  color-scheme: light dark;
+}
+input:disabled,
+select:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 input[type='text']:focus,
 select:focus {
@@ -748,6 +924,12 @@ select:focus {
   font-size: 11px;
   border-radius: 6px;
 }
+/* 已标星条目的 ★ 按钮：亮起琥珀色 */
+.btn.starred {
+  color: #f59e0b;
+  border-color: #f0b429;
+  font-weight: 700;
+}
 .switch {
   position: relative;
   width: 34px;
@@ -774,6 +956,14 @@ select:focus {
 }
 .switch.on::after {
   transform: translateX(16px);
+}
+/* 写系统启动项要等主进程回读，期间压暗表示「正在处理」；不支持的平台直接置灰 */
+.switch.busy,
+.switch.disabled {
+  opacity: 0.45;
+}
+.switch.disabled {
+  cursor: default;
 }
 .sp-hint {
   color: var(--panel-sub);
@@ -953,6 +1143,82 @@ select:focus {
   opacity: 0.28;
   margin: 4px 2px;
 }
+/* 二级菜单：贴在父菜单右侧展开（靠窗口右边时由 JS 翻到左侧） */
+.cm-item.has-sub .cm-arrow {
+  margin-left: auto;
+  padding-left: 12px;
+  font-size: 10px;
+  color: var(--ink-mute);
+  opacity: 0.9;
+}
+.cm-sub {
+  position: absolute;
+  min-width: 104px;
+}
+
+/* ---------- 随记弹窗（多条管理） ---------- */
+.note-list {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  margin: 6px 0 8px;
+}
+.note-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 7px 8px 6px;
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+  background: var(--panel-bg);
+}
+.note-row .note-input {
+  margin: 0 0 2px;
+  min-height: 48px;
+}
+.note-row .note-modes {
+  margin: 2px 0 4px;
+}
+.note-row .btn.danger {
+  align-self: flex-end;
+}
+.note-input {
+  width: 100%;
+  min-height: 64px;
+  resize: vertical;
+  margin: 6px 0 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--ink-mute);
+  border-radius: 7px;
+  background: var(--panel-field);
+  color: var(--panel-ink);
+  font-family: inherit;
+  font-size: 11.5px;
+  line-height: 1.5;
+  outline: none;
+  user-select: text;
+  -webkit-user-select: text;
+}
+.note-input:focus {
+  border-color: var(--panel-border);
+}
+.note-modes {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 4px 0 6px;
+}
+.note-mode {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+.note-mode input {
+  accent-color: var(--accent);
+  cursor: pointer;
+}
 
 /* ---------- Toast ---------- */
 .toast-host {
@@ -1028,6 +1294,30 @@ select:focus {
   gap: 8px;
   justify-content: flex-end;
 }
+
+/* ---------- 功能说明窗口 ---------- */
+.guide-h {
+  font-weight: 700;
+  margin: 10px 0 4px;
+}
+.guide-h:first-child {
+  margin-top: 0;
+}
+.guide-ul {
+  margin: 0 0 4px;
+  padding-left: 18px;
+}
+.guide-ul li {
+  margin: 3px 0;
+  line-height: 1.55;
+  color: var(--panel-ink);
+}
+.guide-ver {
+  margin-top: 12px;
+  font-size: 10px;
+  color: var(--ink-mute);
+  text-align: right;
+}
 .preview-row {
   font-size: 11px;
   padding: 3px 0;
@@ -1036,4 +1326,171 @@ select:focus {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* ---------- 使用说明（分级） ----------
+   四档横排 + 折叠条目：一屏能扫完「由浅入深」，展开才占地方。
+   宽度比普通弹窗大（430），长句在 320 里会折得太碎。 */
+.guide-modal {
+  width: 430px;
+  max-width: calc(100vw - 20px);
+  max-height: 86vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.guide-modal .modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex: 0 0 auto;
+}
+.guide-close {
+  color: #fff;
+  opacity: 0.75;
+}
+.guide-close:hover {
+  opacity: 1;
+}
+.gd-chips {
+  display: flex;
+  gap: 6px;
+  padding: 9px 12px 0;
+  flex-wrap: wrap;
+  flex: 0 0 auto;
+}
+.gd-chip {
+  border: 1px solid var(--panel-border);
+  background: transparent;
+  color: var(--panel-sub);
+  font: inherit;
+  font-size: 11.5px;
+  font-weight: 700;
+  padding: 4px 10px;
+  border-radius: 999px;
+  cursor: pointer;
+  line-height: 1.4;
+}
+.gd-chip:hover {
+  color: var(--panel-ink);
+}
+.gd-chip.active {
+  background: var(--panel-border);
+  color: #fff;
+  border-color: var(--panel-border);
+}
+html[data-theme='dark'] .gd-chip.active {
+  background: #0f172a;
+  color: #f1f5f9;
+}
+.guide-body {
+  overflow-y: auto;
+  flex: 1 1 auto;
+  padding: 9px 12px 6px;
+}
+.gd-sub {
+  font-size: 10.5px;
+  color: var(--panel-sub);
+  margin-bottom: 8px;
+  line-height: 1.5;
+}
+.gd-item {
+  border: 1px solid var(--ink-mute);
+  border-radius: 8px;
+  margin-bottom: 6px;
+  background: var(--panel-bg);
+  overflow: hidden;
+}
+.gd-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 7px 9px;
+  cursor: pointer;
+  font-weight: 700;
+  user-select: none;
+}
+.gd-head:hover {
+  background: var(--panel-field);
+}
+.gd-arrow {
+  flex: 0 0 auto;
+  color: var(--panel-sub);
+  font-size: 10px;
+  line-height: 1.7;
+  transition: transform 0.15s ease;
+}
+.gd-item.open .gd-arrow {
+  transform: rotate(90deg);
+}
+.gd-title {
+  flex: 1 1 auto;
+  line-height: 1.5;
+}
+.gd-body {
+  display: none;
+  padding: 0 10px 8px 24px;
+}
+.gd-item.open .gd-body {
+  display: block;
+}
+.gd-body p {
+  margin: 4px 0 0;
+  line-height: 1.62;
+  color: var(--panel-ink);
+  overflow-wrap: anywhere;
+}
+.guide-foot {
+  align-items: flex-end;
+  gap: 10px;
+  flex: 0 0 auto;
+  padding-top: 6px;
+}
+.guide-privacy {
+  flex: 1 1 auto;
+  font-size: 10px;
+  line-height: 1.5;
+  color: var(--ink-mute);
+}
+.guide-modal .guide-ver {
+  margin: 0 12px 8px;
+}
+
+/* ---------- 多语言排版：西文标签更长 ----------
+   设置项左列固定 74px 是按中文四五个字定的；英文/法文放到 100px 才不至于挤成两行。 */
+html[data-locale='en'] .sp-row > label,
+html[data-locale='fr'] .sp-row > label {
+  width: 100px;
+}
+html[data-locale='ja'] .sp-row > label {
+  width: 84px;
+}
+html[data-locale='en'] .sp-tab,
+html[data-locale='fr'] .sp-tab {
+  /* 拉丁字母标签更长（Raccourcis / Données）：缩一点内边距，尽量一行放得下五个 */
+  padding: 5px 5px;
+  font-size: 11px;
+}
+/* 长提示（英文约中文的 2.2–2.8 倍长）：允许任意断行，别把面板顶宽 */
+.sp-hint {
+  overflow-wrap: anywhere;
+}
+.gd-sub,
+.gd-title,
+.sp-tab,
+.sp-row > label {
+  overflow-wrap: anywhere;
+}
+
+/* 面板里的一行控件：下拉再长也不许把行顶宽（英文选项常比中文长一倍） */
+.sp-row > select,
+.sp-row > input:not([type='range']) {
+  min-width: 0;
+  max-width: 100%;
+}
+.sp-body {
+  overflow-x: hidden;
+}
+.sp-lang-cell > select {
+  max-width: 100%;
 }

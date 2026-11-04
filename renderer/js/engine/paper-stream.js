@@ -290,7 +290,7 @@
         else el.innerHTML = '<div class="empty-page">—</div>';
       } catch (err) {
         console.error('[engine] 渲染失败', err);
-        el.innerHTML = '<div class="empty-page">内容渲染失败</div>';
+        el.innerHTML = `<div class="empty-page">${NS.t('paper.renderFailed')}</div>`;
       }
       if (ci === this._curCi) el.classList.add('is-current');
       return el;
@@ -350,7 +350,10 @@
         const first = (paper.lines && paper.lines[0] && paper.lines[0].text) || '';
         this.petView.setReflection(NS.truncate(first, 8), { fontSize: 16, bold: false });
       } else {
-        this.petView.setReflection(NS.truncate(paper.listName || '清单', 8), { fontSize: 16, bold: false });
+        this.petView.setReflection(NS.truncate(paper.listName || NS.t('paper.defaultListName'), 8), {
+          fontSize: 16,
+          bold: false
+        });
       }
       this.petView.setReflectionDepth(this.shift % this.H, this.H);
     }

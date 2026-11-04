@@ -5,6 +5,7 @@
  */
 const chardet = require('chardet');
 const iconv = require('iconv-lite');
+const i18n = require('../i18n');
 
 const CTRL_RE = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F\uFFFD]/g;
 
@@ -26,7 +27,7 @@ function looksGarbled(text) {
 /** buf → { text, encoding } */
 function decodeBuffer(buf) {
   if (!buf || !buf.length) {
-    const e = new Error('文件是空的，没有可显示的内容');
+    const e = new Error(i18n.t('error.emptyDoc'));
     e.code = 'E_EMPTY_DOC';
     e.expected = true;
     throw e;
@@ -78,7 +79,7 @@ function decodeBuffer(buf) {
     return { text: sanitize(best.raw), encoding: best.enc };
   }
 
-  const e = new Error('文件编码无法识别（不是 UTF-8/GBK 系）');
+  const e = new Error(i18n.t('error.encodingUnknown'));
   e.code = 'E_ENCODING';
   e.expected = true;
   throw e;

@@ -59,10 +59,19 @@ const api = {
   /** 主题跟着纸面走：编辑器开着时切黑夜模式，窗口里的纸也要立刻变黑 */
   editorTheme: (dark) => send('editor:theme', { dark: !!dark }),
 
+  /* ---- 清单导入导出（仅本系统清单，JSON 备份） ---- */
+  checklistExport: () => invoke('checklist:export'),
+  checklistImport: () => invoke('checklist:import'),
+
   /* ---- 应用 ---- */
   quitApp: () => send('app:quit'),
   openUserData: () => invoke('app:openUserData'),
   appInfo: () => invoke('app:info'),
+
+  /* ---- 开机自启动（系统启动项，不落盘到 settings） ---- */
+  autoLaunchStatus: () => invoke('app:autoLaunchStatus'),
+  setAutoLaunch: (enabled) => invoke('app:setAutoLaunch', { enabled: !!enabled }),
+  openStartupSettings: () => invoke('app:openStartupSettings'),
 
   /* ---- 事件流 ---- */
   onAction(cb) {
@@ -107,6 +116,11 @@ api.dict = {
   setLang: api.dictSetLang
 };
 api.shortcut = { set: api.shortcutSet, getAll: api.shortcutGetAll, captureHint: api.shortcutCaptureHint };
+api.autoLaunch = {
+  status: api.autoLaunchStatus,
+  set: api.setAutoLaunch,
+  openSystemSettings: api.openStartupSettings
+};
 api.importer = {
   pickFile: api.importPickFile,
   parse: api.importParse,

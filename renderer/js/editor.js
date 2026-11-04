@@ -13,6 +13,9 @@
 (function () {
   'use strict';
   const $ = (id) => document.getElementById(id);
+  // 文案：词表与 i18n 在 editor.html 里先于本文件加载（同一个 window.XZ）
+  const NS = window.XZ;
+  const T = (k, p) => (NS && NS.t ? NS.t(k, p) : k);
 
   const paper = $('edPaper');
   const btnSave = $('btnSave');
@@ -34,9 +37,29 @@
 
   /* ---------------- 载入 ---------------- */
 
+  /**
+   * 语言：主进程在 editor:payload 里带上 settings.locale 与系统语言，
+   * 这里按主窗口同一套规则解析（auto 时也跟系统一致），再刷静态文案。
+   */
+  function applyLocale(p) {
+    if (!NS || !NS.I18N) return;
+    try {
+      NS.I18N.setLocale((p && p.locale) || 'auto', (p && p.systemLocale) || navigator.language || '');
+      // 窗口标题走 <html data-title-key>，_paint() 已经换成「排版 / Format / …」
+      paper.setAttribute('data-placeholder', T('editor.placeholder'));
+      // 十六进制输入框：例子色值一栏一个，没法写死在词条里
+      for (const el of document.querySelectorAll('[data-i18n-hex]')) {
+        el.title = T('editor.hexHint', { v: el.getAttribute('data-i18n-hex') });
+      }
+    } catch (err) {
+      console.error('[editor] 语言初始化失败', err);
+    }
+  }
+
   function fill(p) {
     if (!p) return;
     payload = Object.assign(payload, p);
+    applyLocale(payload);
     const pp = payload.paper || {};
     // 正文字号跟随纸面设置，这样「相对其他字大一号」在纸上也是大一号
     baseFontSize = Math.max(9, Number(pp.fontSize) || 15);
@@ -144,7 +167,7 @@
   }
 
   function warnNeedSelection() {
-    toast('先选中要改样式的文字，再点');
+    toast(T('editor.selectFirst'));
   }
 
   function exec(cmd, val) {
@@ -164,6 +187,42 @@
     // 按下时不抢焦点，否则选区会消失
     btn.addEventListener('mousedown', (e) => e.preventDefault());
     btn.addEventListener('click', () => exec(btn.dataset.cmd));
+  }
+
+  /* ---------------- 曲线（波浪下划线） ----------------
+     execCommand 没有对应的命令，走和字号/颜色一样的「span 包裹」路线。
+     做成开关：选区里已经有波浪线就剥掉，没有才套上 —— 不然「取消」无处可点。 */
+  const btnWavy = $('btnWavy');
+  btnWavy.addEventListener('mousedown', (e) => e.preventDefault());
+  btnWavy.addEventListener('click', () => {
+    const sel = ensureSelection();
+    if (!sel || !sel.rangeCount || sel.getRangeAt(0).collapsed) {
+      warnNeedSelection();
+      return;
+    }
+    const ok = spanHasStyle(sel.getRangeAt(0), 'textDecoration', 'wavy')
+      ? unwrapStyle(['text-decoration'])
+      : styleSelection('text-decoration', 'text-decoration:underline wavy');
+    if (!ok) warnNeedSelection();
+    else markDirty();
+  });
+
+  /**
+   * 选区覆盖的文字上有没有某条内联样式（v2.8 修「曲线点第二次撤不掉」）。
+   * 关键在「选区所在的 span 自己」也要算上：全选一个带波浪线的 span 里的文字时，
+   * commonAncestorContainer 就在这个 span 里，querySelectorAll 只查后代、
+   * 永远找不到它 —— 于是检测不到已有曲线、剥样式也剥不到它，点第二次只会再套一层。
+   * 现在从选区所在元素一路往上找 span（到纸为止），再补一遍全纸范围内相交的 span。
+   */
+  function spanHasStyle(range, prop, needle) {
+    const start = range.commonAncestorContainer;
+    for (let el = start.nodeType === 1 ? start : start.parentElement; el && el !== paper; el = el.parentElement) {
+      if (el.tagName === 'SPAN' && String(el.style[prop] || '').includes(needle)) return true;
+    }
+    for (const sp of paper.querySelectorAll('span[style]')) {
+      if (range.intersectsNode(sp) && String(sp.style[prop] || '').includes(needle)) return true;
+    }
+    return false;
   }
 
   sizeSel.addEventListener('mousedown', (e) => e.stopPropagation());
@@ -191,13 +250,22 @@
     if (!sel || !sel.rangeCount) return false;
     const range = sel.getRangeAt(0);
     if (range.collapsed) return false;
-    const nodes = [];
     const root = range.commonAncestorContainer;
     const scope = root.nodeType === 1 ? root : root.parentElement;
     if (!scope) return false;
+    const nodes = [];
+    const seen = new Set();
+    // 选区所在的 span 自己 + 往上的 span 祖先也要收进来（到纸为止，不碰纸自身的样式）：
+    // 选区全在一个带样式的 span 里时，querySelectorAll 只查后代、剥不到那个 span，
+    // 这就是「曲线 / 颜色点了撤销没反应」的另一半原因
+    for (let el = scope; el && el !== paper; el = el.parentElement) {
+      if (el.matches && el.matches('span[style],font')) {
+        nodes.push(el);
+        seen.add(el);
+      }
+    }
     for (const el of scope.querySelectorAll('span[style],font')) {
-      if (!range.intersectsNode(el)) continue;
-      nodes.push(el);
+      if (!seen.has(el) && range.intersectsNode(el)) nodes.push(el);
     }
     for (const el of nodes) {
       if (el.tagName === 'FONT') {
@@ -443,12 +511,12 @@
     } catch {
       saving = false;
       allowClose = false;
-      toast('保存失败，请重试（Ctrl+S）');
+      toast(T('editor.saveFailed'));
     }
   }
 
   function cancel() {
-    if (dirty && !window.confirm('还有没保存的内容，确定关闭吗？')) return;
+    if (dirty && !window.confirm(T('editor.confirmClose'))) return;
     dirty = false;
     allowClose = true;
     window.editorAPI.close();
@@ -491,6 +559,10 @@
     if (window.editorAPI.onTheme) {
       // 主窗口切黑夜模式 → 这里的纸立刻跟着变黑
       window.editorAPI.onTheme((dark) => applyTheme(!!dark));
+    }
+    if (window.editorAPI.onLocale) {
+      // 主窗口切界面语言 → 工具带上的字立刻跟着换（正文内容不动、光标不动）
+      window.editorAPI.onLocale((p) => applyLocale(p));
     }
   })();
 })();

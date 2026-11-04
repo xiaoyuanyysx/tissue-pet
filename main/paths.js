@@ -1,7 +1,7 @@
 'use strict';
 /**
  * 路径解析：内置词库、托盘图标、userData 子目录
- * 开发态词库位于项目根目录 词库/；打包后为 extraResources/词库
+ * 开发态词库位于项目根目录 vocab/；打包后为 extraResources/vocab
  */
 const path = require('path');
 const fs = require('fs');
@@ -17,11 +17,11 @@ function existsDir(p) {
 
 function dictDir() {
   const candidates = [];
-  if (app.isPackaged) candidates.push(path.join(process.resourcesPath, '词库'));
+  if (app.isPackaged) candidates.push(path.join(process.resourcesPath, 'vocab'));
   const appPath = app.getAppPath();
-  candidates.push(path.join(appPath, '词库'));
-  candidates.push(path.join(appPath, '..', '词库'));
-  candidates.push(path.join(__dirname, '..', '..', '词库'));
+  candidates.push(path.join(appPath, 'vocab'));
+  candidates.push(path.join(appPath, '..', 'vocab'));
+  candidates.push(path.join(__dirname, '..', '..', 'vocab'));
   for (const c of candidates) {
     if (existsDir(c)) return path.resolve(c);
   }
